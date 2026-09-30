@@ -1,9 +1,6 @@
 // ==========================================
-// PROYECTO: PAC-MAN PERSONALIZADO (FLUTTER & FLAME)
+// PROYECTO: PAC-MAN ARCADE DEFINITIVO (MARCADOR INFERIOR Y HIGH SCORE)
 // Autor: Gabriel Jovanny Osuna Martínez
-// Descripción: Motor de juego arcade desarrollado en Flutter 
-// utilizando el motor Flame, con soporte para movimiento ortogonal,
-// colisiones estrictas, IA de fantasmas y modo pánico.
 // ==========================================
 
 import 'package:flutter/material.dart';
@@ -13,12 +10,10 @@ import 'package:flame/events.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
 
-/// Punto de entrada principal de la aplicación.
 void main() {
   runApp(const MyApp());
 }
 
-/// [MyApp] Configura el tema visual general de la aplicación y el contenedor raíz.
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -26,169 +21,203 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Pac-Man Personalizado - PC',
+      title: 'JOVA-LAND',
       theme: ThemeData.dark(),
-      home: const Scaffold(
-        body: GameWidget.controlled(gameFactory: PacManGame.new),
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: 800,
+            height: 680, // Ligeramente más alto para dar espacio al panel inferior
+            child: GameWidget<PacManGame>.controlled(
+              gameFactory: PacManGame.new,
+              overlayBuilderMap: {
+                'GameOverMenu': (context, game) => GameOverOverlay(game),
+                'GameWinMenu': (context, game) => GameWinOverlay(game),
+              },
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-/// [PacManGame] Núcleo principal del juego que administra el ciclo de vida,
-/// la carga de recursos gráficos, el estado global y los eventos de teclado.
 class PacManGame extends FlameGame with KeyboardEvents {
   late PlayerPacman player;
   int score = 0;
+  int highScore = 0; // Almacena la mayor puntuación de la sesión
   bool isGameOver = false;
+  bool isGameWon = false;
+
+  // Matriz de laberinto simétrica perfecta (19 columnas x 16 filas)
+  final List<List<int>> mazeGrid = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,3,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,3,1],
+    [1,0,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,0,1,0,1,1,1,1,1,0,1,0,1,1,0,1],
+    [1,0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,0,1],
+    [1,1,1,1,0,1,1,1,2,2,2,1,1,1,0,1,1,1,1],
+    [0,0,0,0,0,1,2,2,2,2,2,2,2,1,0,0,0,0,0], // Túneles abiertos
+    [1,1,1,1,0,1,2,2,2,2,2,2,2,1,0,1,1,1,1],
+    [1,1,1,1,0,1,1,1,1,1,1,1,1,1,0,1,1,1,1],
+    [1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,0,1],
+    [1,3,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,3,1],
+    [1,1,0,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1],
+    [1,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,1], // Zona inferior despejada
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  ];
+
+  final double tileSize = 36.0;
+  final int maxCols = 19;
+  
+  // Componentes de texto para la parte inferior
+  late TextComponent scoreText;
+  late TextComponent highScoreText;
 
   @override
-  Color backgroundColor() => const Color(0xFF000000); // Fondo clásico negro estilo arcade
+  Color backgroundColor() => const Color(0xFF000000);
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    
-    // Precarga obligatoria de todos los assets gráficos para evitar retrasos en web
     await images.loadAll(['pacman.png', 'ghost.png', 'dot.png', 'niga.png']);
-    
-    // Inicialización del juego y mapa
+
+    // Panel de marcadores ubicado en la parte inferior (fuera del laberinto)
+    double bottomUIPosition = mazeGrid.length * tileSize + 15;
+
+    scoreText = TextComponent(
+      text: 'SCORE: 0',
+      position: Vector2(100, bottomUIPosition),
+      textRenderer: TextPaint(
+        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+      ),
+    );
+
+    highScoreText = TextComponent(
+      text: 'HIGH SCORE: 0',
+      position: Vector2(450, bottomUIPosition),
+      textRenderer: TextPaint(
+        style: const TextStyle(color: Colors.yellow, fontSize: 20, fontWeight: FontWeight.bold),
+      ),
+    );
+
+    add(scoreText);
+    add(highScoreText);
+
     startGame();
   }
 
-  /// Reinicia o inicializa los componentes del juego a su estado por defecto.
   void startGame() {
     score = 0;
     isGameOver = false;
-    removeAll(children);
+    isGameWon = false;
+    scoreText.text = 'SCORE: $score';
+    overlays.remove('GameOverMenu');
+    overlays.remove('GameWinMenu');
 
-    // 1. Construcción del laberinto extendido
-    _buildExpandedMaze();
+    // Limpiar entidades anteriores del juego
+    children.where((c) => c is PlayerPacman || c is Ghost || c is Dot || c is Wall).toList().forEach((c) => c.removeFromParent());
 
-    // 2. Generación de puntos coleccionables en los pasillos
-    _generateCleanDots();
+    _buildGridMaze();
 
-    // 3. Creación del personaje principal
-    player = PlayerPacman();
+    // Spawn exacto: Penúltimo nivel inferior (fila 14), justo al centro (columna 9)
+    player = PlayerPacman(Vector2(9, 14));
     add(player);
 
-    // 4. Creación de los 4 fantasmas dentro de la caja central de respawn
-    add(Ghost(Vector2(570, 360)));
-    add(Ghost(Vector2(610, 360)));
-    add(Ghost(Vector2(650, 360)));
-    add(Ghost(Vector2(690, 360)));
+    add(Ghost(Vector2(9, 7)));
+    add(Ghost(Vector2(10, 7)));
+    add(Ghost(Vector2(9, 8)));
+    add(Ghost(Vector2(10, 8)));
   }
 
-  /// Dibuja las paredes físicas que conforman la estructura del laberinto.
-  void _buildExpandedMaze() {
-    final walls = [
-      // Bordes exteriores del área de juego
-      Wall(Vector2(80, 40), Vector2(1120, 20)), // Superior
-      Wall(Vector2(80, 40), Vector2(20, 720)),  // Izquierdo
-      Wall(Vector2(1180, 40), Vector2(20, 740)), // Derecho
-      Wall(Vector2(80, 740), Vector2(1120, 20)), // Inferior
+  void addScore(int points) {
+    score += points;
+    scoreText.text = 'SCORE: $score';
 
-      // Obstáculos y bloques internos simétricos
-      Wall(Vector2(160, 100), Vector2(120, 70)),
-      Wall(Vector2(320, 100), Vector2(180, 70)),
-      Wall(Vector2(540, 100), Vector2(180, 70)),
-      Wall(Vector2(760, 100), Vector2(180, 70)),
-      Wall(Vector2(980, 100), Vector2(120, 70)),
+    // Actualizar el récord máximo en tiempo real si se supera
+    if (score > highScore) {
+      highScore = score;
+      highScoreText.text = 'HIGH SCORE: $highScore';
+    }
 
-      Wall(Vector2(160, 210), Vector2(120, 90)),
-      Wall(Vector2(320, 210), Vector2(70, 200)),
-      Wall(Vector2(430, 210), Vector2(90, 70)),
-      Wall(Vector2(740, 210), Vector2(90, 70)),
-      Wall(Vector2(870, 210), Vector2(70, 200)),
-      Wall(Vector2(980, 210), Vector2(120, 90)),
-
-      // Caja central de respawn para los fantasmas (con apertura superior)
-      Wall(Vector2(480, 320), Vector2(100, 20)), 
-      Wall(Vector2(680, 320), Vector2(100, 20)), 
-      Wall(Vector2(480, 450), Vector2(300, 20)), 
-      Wall(Vector2(480, 320), Vector2(20, 140)), 
-      Wall(Vector2(760, 320), Vector2(20, 140)), 
-
-      // Obstáculos de la zona inferior
-      Wall(Vector2(160, 340), Vector2(120, 80)),
-      Wall(Vector2(320, 450), Vector2(70, 110)),
-      Wall(Vector2(430, 500), Vector2(90, 60)),
-      Wall(Vector2(740, 500), Vector2(90, 60)),
-      Wall(Vector2(870, 450), Vector2(70, 110)),
-      Wall(Vector2(980, 340), Vector2(120, 80)),
-
-      Wall(Vector2(160, 460), Vector2(120, 70)),
-      Wall(Vector2(980, 460), Vector2(120, 70)),
-
-      Wall(Vector2(160, 570), Vector2(220, 50)),
-      Wall(Vector2(420, 600), Vector2(420, 50)),
-      Wall(Vector2(880, 570), Vector2(220, 50)),
-    ];
-
-    for (var w in walls) {
-      add(w);
+    if (children.whereType<Dot>().isEmpty) {
+      triggerGameWin();
     }
   }
 
-  /// Distribuye los puntos coleccionables evitando colocarlos sobre las paredes.
-  void _generateCleanDots() {
-    final powerUpCoords = [
-      Vector2(120, 75),
-      Vector2(1140, 75),
-      Vector2(120, 690),
-      Vector2(1140, 690),
-      Vector2(630, 180),
-      Vector2(250, 650),
-      Vector2(1010, 650),
-    ];
+  void _buildGridMaze() {
+    for (int row = 0; row < mazeGrid.length; row++) {
+      for (int col = 0; col < mazeGrid[row].length; col++) {
+        int cell = mazeGrid[row][col];
+        Vector2 pos = Vector2(col * tileSize, row * tileSize);
 
-    for (double x = 115; x < 1170; x += 55) {
-      for (double y = 75; y < 710; y += 55) {
-        if (!_isHittingWall(x, y)) {
-          bool isPower = powerUpCoords.any((p) => (p.x - x).abs() < 20 && (p.y - y).abs() < 20);
-          add(Dot(Vector2(x, y), isPowerUp: isPower));
+        if (cell == 1) {
+          add(Wall(pos, Vector2(tileSize, tileSize)));
+        } else if (cell == 0) {
+          add(Dot(Vector2(col.toDouble(), row.toDouble()), isPowerUp: false));
+        } else if (cell == 3) {
+          add(Dot(Vector2(col.toDouble(), row.toDouble()), isPowerUp: true));
         }
       }
     }
   }
 
-  /// Verifica si una coordenada interseca con alguna pared o la zona de respawn.
-  bool _isHittingWall(double x, double y) {
-    if (x >= 480 && x <= 780 && y >= 320 && y <= 470) return true;
-    for (var w in children.whereType<Wall>()) {
-      final rect = w.size.toRect().shift(Offset(w.position.x, w.position.y));
-      if (rect.inflate(10).contains(Offset(x, y))) return true;
-    }
-    return false;
+  bool isWalkable(int col, int row, {bool isGhost = false}) {
+    if (row < 0 || row >= mazeGrid.length) return false;
+    if (col < 0 || col >= maxCols) return true;
+    int cell = mazeGrid[row][col];
+    if (cell == 1) return false;
+    if (cell == 2 && !isGhost) return false;
+    return true;
   }
 
-  /// Activa el estado de fin de partida y muestra el menú interactivo.
+  bool hasLineOfSight(Vector2 ghostGrid, Vector2 playerGrid) {
+    if (ghostGrid.y != playerGrid.y) return false;
+    int startX = ghostGrid.x.toInt();
+    int startY = ghostGrid.y.toInt();
+    int targetX = playerGrid.x.toInt();
+
+    int step = targetX > startX ? 1 : -1;
+    for (int x = startX + step; x != targetX; x += step) {
+      if (x >= 0 && x < maxCols && mazeGrid[startY][x] == 1) return false;
+    }
+    return true;
+  }
+
   void triggerGameOver() {
-    if (isGameOver) return;
+    if (isGameOver || isGameWon) return;
     isGameOver = true;
     overlays.add('GameOverMenu');
   }
 
+  void triggerGameWin() {
+    if (isGameOver || isGameWon) return;
+    isGameWon = true;
+    overlays.add('GameWinMenu');
+  }
+
   @override
   KeyEventResult onKeyEvent(KeyEvent event, Set<LogicalKeyboardKey> keysPressed) {
-    if (isGameOver) return KeyEventResult.ignored;
+    if (isGameOver || isGameWon) return KeyEventResult.ignored;
 
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (keysPressed.contains(LogicalKeyboardKey.arrowLeft)) {
-        player.nextDirection = Vector2(-1, 0);
+        player.nextDir = Vector2(-1, 0);
       } else if (keysPressed.contains(LogicalKeyboardKey.arrowRight)) {
-        player.nextDirection = Vector2(1, 0);
+        player.nextDir = Vector2(1, 0);
       } else if (keysPressed.contains(LogicalKeyboardKey.arrowUp)) {
-        player.nextDirection = Vector2(0, -1);
+        player.nextDir = Vector2(0, -1);
       } else if (keysPressed.contains(LogicalKeyboardKey.arrowDown)) {
-        player.nextDirection = Vector2(0, 1);
+        player.nextDir = Vector2(0, 1);
       }
     }
     return KeyEventResult.handled;
   }
 }
 
-/// [GameOverOverlay] Interfaz gráfica superpuesta al perder la partida.
+// Interfaz de Game Over centrada con botón de reinicio
 class GameOverOverlay extends StatelessWidget {
   final PacManGame game;
   const GameOverOverlay(this.game, {super.key});
@@ -196,29 +225,27 @@ class GameOverOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.black54,
+      color: Colors.black87,
       child: Center(
         child: Container(
-          padding: const EdgeInsets.all(36),
+          padding: const EdgeInsets.all(32),
           decoration: BoxDecoration(
             color: Colors.blue.shade900,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.yellow, width: 4),
+            border: Border.all(color: Colors.redAccent, width: 4),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('¡GAME OVER!', style: TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.yellow)),
-              const SizedBox(height: 16),
-              Text('Puntuación: ${game.score}', style: const TextStyle(fontSize: 24, color: Colors.white)),
-              const SizedBox(height: 28),
+              const Text('GAME OVER', style: TextStyle(fontSize: 38, fontWeight: FontWeight.bold, color: Colors.redAccent)),
+              const SizedBox(height: 12),
+              Text('Puntuación: ${game.score}', style: const TextStyle(fontSize: 20, color: Colors.white)),
+              Text('Récord Máximo: ${game.highScore}', style: const TextStyle(fontSize: 18, color: Colors.yellow)),
+              const SizedBox(height: 24),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.yellow, foregroundColor: Colors.black),
-                onPressed: () {
-                  game.overlays.remove('GameOverMenu');
-                  game.startGame();
-                },
-                child: const Text('Reiniciar Juego', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.yellow, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12)),
+                onPressed: () => game.startGame(),
+                child: const Text('Reiniciar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               ),
             ],
           ),
@@ -228,129 +255,210 @@ class GameOverOverlay extends StatelessWidget {
   }
 }
 
-/// [PlayerPacman] Representa al personaje controlado por el usuario con movimiento ortogonal estricto.
-class PlayerPacman extends SpriteComponent with HasGameRef<PacManGame> {
-  Vector2 moveDirection = Vector2.zero();
-  Vector2 nextDirection = Vector2.zero();
-  final double speed = 200.0;
+// Interfaz de Victoria centrada con botón de reinicio
+class GameWinOverlay extends StatelessWidget {
+  final PacManGame game;
+  const GameWinOverlay(this.game, {super.key});
 
-  PlayerPacman() {
-    size = Vector2(40, 40);
-    position = Vector2(630, 520);
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black87,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade900,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.yellow, width: 4),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('¡VICTORIA!', style: TextStyle(fontSize: 38, fontWeight: FontWeight.bold, color: Colors.yellow)),
+              const SizedBox(height: 12),
+              Text('¡Comiste todos los puntos!\nPuntuación: ${game.score}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, color: Colors.white)),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.yellow, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12)),
+                onPressed: () => game.startGame(),
+                child: const Text('Reiniciar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
+}
+
+// Jugador Pac-Man con Snap-to-Grid
+class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
+  Vector2 gridPos;
+  Vector2 moveDir = Vector2.zero();
+  Vector2 nextDir = Vector2.zero();
+  double moveProgress = 0.0;
+  final double speed = 6.0;
+
+  PlayerPacman(this.gridPos);
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    sprite = Sprite(gameRef.images.fromCache('pacman.png'));
+    sprite = Sprite(game.images.fromCache('pacman.png'));
+    size = Vector2(28, 28);
+    position = Vector2(gridPos.x * game.tileSize + 4, gridPos.y * game.tileSize + 4);
   }
 
   @override
   void update(double dt) {
     super.update(dt);
-    if (gameRef.isGameOver) return;
+    if (game.isGameOver || game.isGameWon) return;
 
-    // Validación estricta para impedir movimientos en diagonal
-    if (nextDirection != Vector2.zero()) {
-      if (nextDirection.x != 0) nextDirection.y = 0;
-      else if (nextDirection.y != 0) nextDirection.x = 0;
+    if (moveProgress == 0.0) {
+      if (nextDir != Vector2.zero()) {
+        int nextX = (gridPos.x + nextDir.x).toInt();
+        int nextY = (gridPos.y + nextDir.y).toInt();
+        if (game.isWalkable(nextX, nextY, isGhost: false)) {
+          moveDir = nextDir.clone();
+          nextDir.setZero();
+        }
+      }
 
-      position += nextDirection * speed * dt;
-      if (_checkWallCollision()) {
-        position -= nextDirection * speed * dt;
-      } else {
-        moveDirection = nextDirection;
+      int targetX = (gridPos.x + moveDir.x).toInt();
+      int targetY = (gridPos.y + moveDir.y).toInt();
+      if (!game.isWalkable(targetX, targetY, isGhost: false)) {
+        moveDir.setZero();
       }
     }
 
-    if (moveDirection.x != 0) moveDirection.y = 0;
-    else if (moveDirection.y != 0) moveDirection.x = 0;
+    if (moveDir != Vector2.zero()) {
+      moveProgress += speed * dt;
 
-    position += moveDirection * speed * dt;
-    if (_checkWallCollision()) {
-      position -= moveDirection * speed * dt;
-      moveDirection = Vector2.zero();
+      double startX = gridPos.x * game.tileSize + 4;
+      double startY = gridPos.y * game.tileSize + 4;
+      double endX = (gridPos.x + moveDir.x) * game.tileSize + 4;
+      double endY = (gridPos.y + moveDir.y) * game.tileSize + 4;
+
+      position.x = startX + (endX - startX) * min(moveProgress, 1.0);
+      position.y = startY + (endY - startY) * min(moveProgress, 1.0);
+
+      if (moveProgress >= 1.0) {
+        gridPos.add(moveDir);
+        moveProgress = 0.0;
+
+        if (gridPos.x < 0) {
+          gridPos.x = (game.maxCols - 1).toDouble();
+          position.x = gridPos.x * game.tileSize + 4;
+        } else if (gridPos.x >= game.maxCols) {
+          gridPos.x = 0;
+          position.x = gridPos.x * game.tileSize + 4;
+        }
+      }
     }
 
-    // Lógica de colisión con los coleccionables (Dots y Power-Ups)
-    gameRef.children.whereType<Dot>().toList().forEach((dot) {
-      if (toRect().overlaps(dot.toRect())) {
+    game.children.whereType<Dot>().toList().forEach((dot) {
+      if (dot.gridPos == gridPos) {
         dot.removeFromParent();
-        gameRef.score += dot.isPowerUp ? 100 : 10;
+        game.addScore(dot.isPowerUp ? 100 : 10);
         if (dot.isPowerUp) {
-          gameRef.children.whereType<Ghost>().forEach((g) => g.triggerPanic());
+          game.children.whereType<Ghost>().forEach((g) => g.triggerPanic());
         }
       }
     });
   }
-
-  /// Comprueba si la posición actual intersecta con algún objeto de tipo [Wall].
-  bool _checkWallCollision() {
-    for (var wall in gameRef.children.whereType<Wall>()) {
-      if (toRect().overlaps(wall.toRect())) return true;
-    }
-    return false;
-  }
 }
 
-/// [Dot] Puntos o superpuntos repartidos en el escenario.
-class Dot extends SpriteComponent with HasGameRef<PacManGame> {
+class Dot extends SpriteComponent with HasGameReference<PacManGame> {
+  Vector2 gridPos;
   bool isPowerUp;
-  Dot(Vector2 pos, {this.isPowerUp = false}) {
-    position = pos;
-    size = isPowerUp ? Vector2(24, 24) : Vector2(10, 10);
-  }
+  Dot(this.gridPos, {this.isPowerUp = false});
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    sprite = Sprite(gameRef.images.fromCache('dot.png'));
+    sprite = Sprite(game.images.fromCache('dot.png'));
+    size = isPowerUp ? Vector2(16, 16) : Vector2(7, 7);
+    position = Vector2(
+      gridPos.x * game.tileSize + (game.tileSize - size.x) / 2,
+      gridPos.y * game.tileSize + (game.tileSize - size.y) / 2,
+    );
   }
 }
 
-/// [Ghost] Entidad enemiga con inteligencia artificial ortogonal, modo pánico y retorno como punto blanco.
-class Ghost extends SpriteComponent with HasGameRef<PacManGame> {
-  Vector2 velocity = Vector2(70, 0);
-  final Vector2 spawnPosition = Vector2(630, 390);
+class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
+  Vector2 gridPos;
+  final Vector2 spawnGridPos = Vector2(9, 7);
+  Vector2 moveDir = Vector2(0, -1);
+  double moveProgress = 0.0;
+  final double speed = 4.5;
   bool isScared = false;
-  bool isDead = false; 
+  bool isDead = false;
+  bool isLeavingSpawn = true;
   double scaredTimer = 0.0;
   Random random = Random();
 
-  Ghost(Vector2 startPos) {
-    position = startPos;
-    size = Vector2(44, 44);
-  }
+  Ghost(this.gridPos);
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    sprite = Sprite(gameRef.images.fromCache('ghost.png'));
+    sprite = Sprite(game.images.fromCache('ghost.png'));
+    size = Vector2(28, 28);
+    position = Vector2(gridPos.x * game.tileSize + 4, gridPos.y * game.tileSize + 4);
   }
 
-  /// Activa el estado de pánico, cambiando la textura a 'niga.png' y reduciendo velocidad.
   void triggerPanic() {
-    if (!isDead) {
+    if (!isDead && !isLeavingSpawn) {
       isScared = true;
       scaredTimer = 8.0;
-      sprite = Sprite(gameRef.images.fromCache('niga.png'));
-      velocity *= 0.5;
+      sprite = Sprite(game.images.fromCache('niga.png'));
     }
   }
 
   @override
   void update(double dt) {
     super.update(dt);
-    if (gameRef.isGameOver) return;
+    if (game.isGameOver || game.isGameWon) return;
 
-    // Si el fantasma fue derrotado, regresa a la base convertido en un punto blanco visual
     if (isDead) {
-      position = position + (spawnPosition - position).normalized() * 300 * dt;
-      if (position.distanceTo(spawnPosition) < 12) {
+      Vector2 targetSpawnPx = Vector2(spawnGridPos.x * game.tileSize + 4, spawnGridPos.y * game.tileSize + 4);
+      position = position + (targetSpawnPx - position).normalized() * 260 * dt;
+      if (position.distanceTo(targetSpawnPx) < 8) {
         isDead = false;
         isScared = false;
-        sprite = Sprite(gameRef.images.fromCache('ghost.png'));
-        velocity = Vector2(70, 0);
+        isLeavingSpawn = true;
+        gridPos = spawnGridPos.clone();
+        position = Vector2(gridPos.x * game.tileSize + 4, gridPos.y * game.tileSize + 4);
+        sprite = Sprite(game.images.fromCache('ghost.png'));
+      }
+      return;
+    }
+
+    if (isLeavingSpawn) {
+      moveDir = Vector2(0, -1);
+      if (moveProgress == 0.0) {
+        int targetX = (gridPos.x + moveDir.x).toInt();
+        int targetY = (gridPos.y + moveDir.y).toInt();
+        if (!game.isWalkable(targetX, targetY, isGhost: true)) {
+          moveDir = Vector2(0, 1);
+        }
+      }
+      moveProgress += speed * dt;
+      double startX = gridPos.x * game.tileSize + 4;
+      double startY = gridPos.y * game.tileSize + 4;
+      double endX = (gridPos.x + moveDir.x) * game.tileSize + 4;
+      double endY = (gridPos.y + moveDir.y) * game.tileSize + 4;
+
+      position.x = startX + (endX - startX) * min(moveProgress, 1.0);
+      position.y = startY + (endY - startY) * min(moveProgress, 1.0);
+
+      if (moveProgress >= 1.0) {
+        gridPos.add(moveDir);
+        moveProgress = 0.0;
+        if (gridPos.y <= 6) {
+          isLeavingSpawn = false;
+        }
       }
       return;
     }
@@ -359,69 +467,67 @@ class Ghost extends SpriteComponent with HasGameRef<PacManGame> {
       scaredTimer -= dt;
       if (scaredTimer <= 0) {
         isScared = false;
-        sprite = Sprite(gameRef.images.fromCache('ghost.png'));
-        velocity *= 2.0;
+        sprite = Sprite(game.images.fromCache('ghost.png'));
       }
     }
 
-    final player = gameRef.player;
-    double distanceToPlayer = position.distanceTo(player.position);
+    if (moveProgress == 0.0) {
+      final player = game.player;
+      bool hasVision = game.hasLineOfSight(gridPos, player.gridPos);
 
-    // Inteligencia artificial con vectores estrictamente ortogonales
-    if (!isScared && distanceToPlayer < 250) {
-      if ((player.position.x - position.x).abs() > (player.position.y - position.y).abs()) {
-        velocity = Vector2((player.position.x > position.x) ? 90 : -90, 0);
+      if (hasVision && !isScared) {
+        moveDir = Vector2(player.gridPos.x > gridPos.x ? 1 : -1, 0);
+      } else if (hasVision && isScared) {
+        moveDir = Vector2(player.gridPos.x > gridPos.x ? -1 : 1, 0);
       } else {
-        velocity = Vector2(0, (player.position.y > position.y) ? 90 : -90);
-      }
-    } else if (isScared && distanceToPlayer < 200) {
-      if ((player.position.x - position.x).abs() > (player.position.y - position.y).abs()) {
-        velocity = Vector2((player.position.x > position.x) ? -70 : 70, 0);
-      } else {
-        velocity = Vector2(0, (player.position.y > position.y) ? -70 : 70);
-      }
-    } else {
-      if (random.nextDouble() < 0.03) {
-        List<Vector2> dirs = [
-          Vector2(70, 0),
-          Vector2(-70, 0),
-          Vector2(0, 70),
-          Vector2(0, -70)
-        ];
-        velocity = dirs[random.nextInt(dirs.length)];
+        List<Vector2> validDirs = [];
+        for (var dir in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]) {
+          if (dir != -moveDir && game.isWalkable((gridPos.x + dir.x).toInt(), (gridPos.y + dir.y).toInt(), isGhost: true)) {
+            validDirs.add(dir);
+          }
+        }
+        if (validDirs.isNotEmpty) {
+          moveDir = validDirs[random.nextInt(validDirs.length)];
+        } else {
+          moveDir = -moveDir;
+        }
       }
     }
 
-    if (velocity.x != 0) velocity.y = 0;
-    else if (velocity.y != 0) velocity.x = 0;
+    moveProgress += speed * dt;
+    double startX = gridPos.x * game.tileSize + 4;
+    double startY = gridPos.y * game.tileSize + 4;
+    double endX = (gridPos.x + moveDir.x) * game.tileSize + 4;
+    double endY = (gridPos.y + moveDir.y) * game.tileSize + 4;
 
-    position += velocity * dt;
+    position.x = startX + (endX - startX) * min(moveProgress, 1.0);
+    position.y = startY + (endY - startY) * min(moveProgress, 1.0);
 
-    // Colisión contra paredes del laberinto
-    for (var wall in gameRef.children.whereType<Wall>()) {
-      if (toRect().overlaps(wall.toRect())) {
-        position -= velocity * dt;
-        velocity = -velocity;
-        if (velocity.x != 0) velocity.y = 0;
-        else if (velocity.y != 0) velocity.x = 0;
-        break;
+    if (moveProgress >= 1.0) {
+      gridPos.add(moveDir);
+      moveProgress = 0.0;
+
+      if (gridPos.x < 0) {
+        gridPos.x = (game.maxCols - 1).toDouble();
+        position.x = gridPos.x * game.tileSize + 4;
+      } else if (gridPos.x >= game.maxCols) {
+        gridPos.x = 0;
+        position.x = gridPos.x * game.tileSize + 4;
       }
     }
 
-    // Colisión directa con el jugador
-    if (toRect().overlaps(player.toRect())) {
+    if (toRect().overlaps(game.player.toRect())) {
       if (isScared) {
         isDead = true;
-        sprite = Sprite(gameRef.images.fromCache('dot.png'));
-        gameRef.score += 500;
+        sprite = Sprite(game.images.fromCache('dot.png'));
+        game.addScore(500);
       } else {
-        gameRef.triggerGameOver();
+        game.triggerGameOver();
       }
     }
   }
 }
 
-/// [Wall] Componente estático que define los límites físicos de las paredes.
 class Wall extends PositionComponent {
   Wall(Vector2 pos, Vector2 sz) {
     position = pos;
@@ -431,7 +537,7 @@ class Wall extends PositionComponent {
   @override
   void render(Canvas canvas) {
     super.render(canvas);
-    final paint = Paint()..color = const Color(0xFF1E1EEB); // Estilo de color azul clásico arcade
+    final paint = Paint()..color = const Color(0xFF1E1EEB);
     canvas.drawRect(size.toRect(), paint);
   }
 }

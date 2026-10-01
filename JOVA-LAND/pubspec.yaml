@@ -21,7 +21,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-  # Declaración correcta de la carpeta de imágenes con su indentación exacta
   assets:
-    - assets/images/
+    - assets/images/jova_logo.png
+    - assets/images/pacman.png
+    - assets/images/ghost.png
+    - assets/images/dot.png
+    - assets/images/niga.png

@@ -1,5 +1,5 @@
 // ==========================================
-// PROYECTO: JOVA-LAND (VERSIÓN FINAL COMPLETA)
+// PROYECTO: JOVA-LAND (CON PANTALLA DE GAME OVER PERSONALIZADA)
 // Autor: Gabriel Jovanny Osuna Martínez
 // ==========================================
 
@@ -53,7 +53,6 @@ class MainMenuScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Logotipo principal con la ruta correcta hacia assets/images/
             Image.asset(
               'assets/images/jova_logo.png',
               width: 420,
@@ -66,7 +65,6 @@ class MainMenuScreen extends StatelessWidget {
               },
             ),
             const SizedBox(height: 35),
-            // Botón interactivo de inicio
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue.shade800,
@@ -363,6 +361,9 @@ class MobileControlsWidget extends StatelessWidget {
   }
 }
 
+// ==========================================
+// PANTALLA DE GAME OVER PERSONALIZADA
+// ==========================================
 class GameOverOverlay extends StatelessWidget {
   final PacManGame game;
   const GameOverOverlay(this.game, {super.key});
@@ -370,30 +371,42 @@ class GameOverOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.black87,
+      color: Colors.black,
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.blue.shade900,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.redAccent, width: 4),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('GAME OVER', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: Colors.redAccent)),
-              const SizedBox(height: 8),
-              Text('Puntuación: ${game.score}', style: const TextStyle(fontSize: 18, color: Colors.white)),
-              Text('Récord Máximo: ${game.highScore}', style: const TextStyle(fontSize: 16, color: Colors.yellow)),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.yellow, foregroundColor: Colors.black, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10)),
-                onPressed: () => game.startGame(),
-                child: const Text('Reiniciar', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Imagen de Game Over personalizada
+            Image.asset(
+              'assets/images/game_over.png',
+              height: 270,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Text(
+                  'GAME OVER',
+                  style: TextStyle(fontSize: 35, fontWeight: FontWeight.bold, color: Colors.redAccent),
+                );
+              },
+            ),
+            const SizedBox(height: 20),
+            // Puntuación obtenida
+            Text('Puntuación: ${game.score}', style: const TextStyle(fontSize: 18, color: Colors.white)),
+            const SizedBox(height: 15),
+            // Botón de Reiniciar
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue.shade800,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: const BorderSide(color: Colors.yellow, width: 2),
+                ),
               ),
-            ],
-          ),
+              onPressed: () => game.startGame(),
+              child: const Text('Reiniciar', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ],
         ),
       ),
     );

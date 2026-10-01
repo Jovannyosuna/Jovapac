@@ -23,6 +23,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/jova_logo.png
+    - assets/images/game_over.png
     - assets/images/pacman.png
     - assets/images/ghost.png
     - assets/images/dot.png

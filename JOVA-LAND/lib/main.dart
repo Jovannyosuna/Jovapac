@@ -1,7 +1,13 @@
-// ==========================================
-// PROYECTO: JOVA-LAND (CON PANTALLA DE GAME OVER PERSONALIZADA)
-// Autor: Gabriel Jovanny Osuna Martínez
-// ==========================================
+// ==============================================================================
+// PROYECTO: LA-SANVI (Motor Arcade Híbrido Multiplataforma)
+// AUTOR: Gabriel Jovanny Osuna Martínez
+// DESCRIPCIÓN TÉCNICA: Videojuego arcade 2D desarrollado con Flutter y el motor 
+// Flame. Implementa arquitectura basada en componentes, gestión de estados reactivos,
+// menús superpuestos nativos (Overlays), optimización gráfica para escritorio y 
+// dispositivos móviles, y un sistema de movimiento absoluto en rejilla con búfer 
+// de comandos para garantizar cero latencia, transiciones fluidas y colisiones 
+// estrictas sin excepciones.
+// ==============================================================================
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -11,6 +17,9 @@ import 'package:flame/events.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
 
+/// Punto de entrada principal de la aplicación.
+/// Inicializa los enlaces de Flutter y configura las restricciones nativas de 
+/// orientación horizontal y modo inmersivo en plataformas móviles.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
@@ -25,6 +34,8 @@ void main() async {
   runApp(const MyApp());
 }
 
+/// Widget raíz de la aplicación. Configura el tema visual oscuro global y
+/// establece el flujo de navegación inicial hacia el menú principal.
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -39,9 +50,9 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// ==========================================
-// PANTALLA DE INICIO (MENÚ PRINCIPAL)
-// ==========================================
+/// ==============================================================================
+/// MÓDULO DE INTERFAZ: PANTALLA DE INICIO (MENÚ PRINCIPAL)
+/// ==============================================================================
 class MainMenuScreen extends StatelessWidget {
   const MainMenuScreen({super.key});
 
@@ -53,6 +64,7 @@ class MainMenuScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // Renderizado del logotipo corporativo con respaldo textual de seguridad
             Image.asset(
               'assets/images/jova_logo.png',
               width: 420,
@@ -65,6 +77,7 @@ class MainMenuScreen extends StatelessWidget {
               },
             ),
             const SizedBox(height: 35),
+            // Botón interactivo de arranque de sesión de juego
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue.shade800,
@@ -77,6 +90,7 @@ class MainMenuScreen extends StatelessWidget {
                 elevation: 6,
               ),
               onPressed: () {
+                // Transición limpia reemplazando la ruta actual por el contenedor del juego
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (context) => const GameScreen()),
@@ -98,9 +112,9 @@ class MainMenuScreen extends StatelessWidget {
   }
 }
 
-// ==========================================
-// PANTALLA CONTENEDORA DEL JUEGO
-// ==========================================
+/// ==============================================================================
+/// MÓDULO CONTENEDOR: ENTORNO DE EJECUCIÓN DEL MOTOR FLAME
+/// ==============================================================================
 class GameScreen extends StatelessWidget {
   const GameScreen({super.key});
 
@@ -113,6 +127,7 @@ class GameScreen extends StatelessWidget {
         child: SizedBox(
           width: 900,
           height: 450,
+          // Arquitectura de capas en Stack: integra el canvas de Flame y la botonera móvil
           child: Stack(
             children: [
               GameWidget<PacManGame>.controlled(
@@ -132,6 +147,9 @@ class GameScreen extends StatelessWidget {
   }
 }
 
+/// ==============================================================================
+/// NÚCLEO LÓGICO DEL VIDEOJUEGO ([FlameGame])
+/// ==============================================================================
 class PacManGame extends FlameGame with KeyboardEvents {
   late PlayerPacman player;
   int score = 0;
@@ -139,8 +157,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
   bool isGameOver = false;
   bool isGameWon = false;
 
+  // Notificador reactivo para visibilidad de controles táctiles según el estado de la partida
   final ValueNotifier<bool> showControls = ValueNotifier<bool>(true);
 
+  // Matriz bidimensional del laberinto (1: Muro, 0: Punto, 3: Power-up, 2: Zona restringida de spawn)
   final List<List<int>> mazeGrid = [
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
     [1,3,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,3,1],
@@ -173,12 +193,14 @@ class PacManGame extends FlameGame with KeyboardEvents {
   @override
   Future<void> onLoad() async {
     super.onLoad();
+    // Carga centralizada de assets gráficos
     try {
-      await images.loadAll(['pacman.png', 'ghost.png', 'dot.png', 'niga.png']);
+      await images.loadAll(['pacman.png', 'ghost.png', 'dot.png', 'niga.png', 'game_over.png', 'jova_logo.png']);
     } catch (e) {
-      debugPrint("Error al cargar imágenes: $e");
+      debugPrint("Error crítico al cargar recursos multimedia: $e");
     }
 
+    // Inicialización del Head-Up Display (HUD) de puntajes
     scoreText = TextComponent(
       text: 'SCORE: 0',
       position: Vector2(700, 30),
@@ -201,6 +223,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     startGame();
   }
 
+  /// Restablece el estado global de la partida para un nuevo ciclo de juego.
   void startGame() {
     score = 0;
     isGameOver = false;
@@ -223,6 +246,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     add(Ghost(Vector2(10, 8)));
   }
 
+  /// Actualiza la puntuación acumulada y evalúa condiciones de victoria/récord.
   void addScore(int points) {
     score += points;
     scoreText.text = 'SCORE: $score';
@@ -237,6 +261,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     }
   }
 
+  /// Construye geométricamente los muros y coleccionables del laberinto.
   void _buildGridMaze() {
     for (int row = 0; row < mazeGrid.length; row++) {
       for (int col = 0; col < mazeGrid[row].length; col++) {
@@ -254,15 +279,18 @@ class PacManGame extends FlameGame with KeyboardEvents {
     }
   }
 
+  /// Valida la transitabilidad de una celda específica del laberinto.
+  /// [isGhost] determina si se aplican restricciones adicionales de spawn.
   bool isWalkable(int col, int row, {bool isGhost = false}) {
     if (row < 0 || row >= mazeGrid.length) return false;
-    if (col < 0 || col >= maxCols) return true;
+    if (col < 0 || col >= maxCols) return true; // Soporte para túneles laterales
     int cell = mazeGrid[row][col];
-    if (cell == 1) return false;
+    if (cell == 1) return false; // Muros infranqueables estrictos
     if (cell == 2 && !isGhost) return false;
     return true;
   }
 
+  /// Algoritmo de línea de visión (*Line of Sight*) para la IA de persecución.
   bool hasLineOfSight(Vector2 ghostGrid, Vector2 playerGrid) {
     if (ghostGrid.y != playerGrid.y) return false;
     int startX = ghostGrid.x.toInt();
@@ -309,6 +337,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
   }
 }
 
+/// ==============================================================================
+/// CAPA DE CONTROLES TÁCTILES NATIVOS PARA DISPOSITIVOS MÓVILES
+/// ==============================================================================
 class MobileControlsWidget extends StatelessWidget {
   final PacManGame game;
   const MobileControlsWidget({required this.game, super.key});
@@ -361,9 +392,9 @@ class MobileControlsWidget extends StatelessWidget {
   }
 }
 
-// ==========================================
-// PANTALLA DE GAME OVER PERSONALIZADA
-// ==========================================
+/// ==============================================================================
+/// MENÚ SUPERPUESTO: PANTALLA DE DERROTA (GAME OVER)
+/// ==============================================================================
 class GameOverOverlay extends StatelessWidget {
   final PacManGame game;
   const GameOverOverlay(this.game, {super.key});
@@ -376,10 +407,10 @@ class GameOverOverlay extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Imagen de Game Over personalizada
+            // Imagen de Game Over personalizada en pantalla completa
             Image.asset(
               'assets/images/game_over.png',
-              height: 270,
+              height: 250,
               fit: BoxFit.contain,
               errorBuilder: (context, error, stackTrace) {
                 return const Text(
@@ -388,11 +419,9 @@ class GameOverOverlay extends StatelessWidget {
                 );
               },
             ),
-            const SizedBox(height: 20),
-            // Puntuación obtenida
-            Text('Puntuación: ${game.score}', style: const TextStyle(fontSize: 18, color: Colors.white)),
             const SizedBox(height: 15),
-            // Botón de Reiniciar
+            Text('Puntuación: ${game.score}', style: const TextStyle(fontSize: 18, color: Colors.white)),
+            const SizedBox(height: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue.shade800,
@@ -413,6 +442,9 @@ class GameOverOverlay extends StatelessWidget {
   }
 }
 
+/// ==============================================================================
+/// MENÚ SUPERPUESTO: PANTALLA DE VICTORIA
+/// ==============================================================================
 class GameWinOverlay extends StatelessWidget {
   final PacManGame game;
   const GameWinOverlay(this.game, {super.key});
@@ -449,12 +481,16 @@ class GameWinOverlay extends StatelessWidget {
   }
 }
 
+/// ==============================================================================
+/// ENTIDAD DE JUEGO: JUGADOR (PACMAN)
+/// Implementa búfer de comandos y alineación estricta en rejilla para prevenir saltos.
+/// ==============================================================================
 class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
   Vector2 gridPos;
   Vector2 moveDir = Vector2.zero();
   Vector2 nextDir = Vector2.zero();
   double moveProgress = 0.0;
-  final double speed = 6.0;
+  final double speed = 5.0;
 
   PlayerPacman(this.gridPos);
 
@@ -465,19 +501,27 @@ class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
       sprite = Sprite(game.images.fromCache('pacman.png'));
     } catch (_) {}
     size = Vector2(18, 18);
-    position = Vector2(game.mazeOffsetX + gridPos.x * game.tileSize + 3, gridPos.y * game.tileSize + 3);
+    updatePixelPosition();
   }
 
+  /// Sincroniza la posición absoluta en píxeles basada en la rejilla lógica.
+  void updatePixelPosition() {
+    position = Vector2(
+      game.mazeOffsetX + gridPos.x * game.tileSize + 3,
+      gridPos.y * game.tileSize + 3,
+    );
+  }
+
+  /// Gestiona el cambio de dirección mediante búfer, permitiendo inversión instantánea en U.
   void changeDirection(Vector2 newDir) {
-    int targetX = (gridPos.x + newDir.x).toInt();
-    int targetY = (gridPos.y + newDir.y).toInt();
-    
-    if (game.isWalkable(targetX, targetY, isGhost: false)) {
+    if (newDir == -moveDir) {
       moveDir = newDir.clone();
       nextDir.setZero();
-    } else {
-      nextDir = newDir.clone();
+      moveProgress = 1.0 - moveProgress;
+      gridPos.add(moveDir);
+      return;
     }
+    nextDir = newDir.clone();
   }
 
   @override
@@ -494,6 +538,7 @@ class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
     super.update(dt);
     if (game.isGameOver || game.isGameWon) return;
 
+    // Validación al inicio de cada celda
     if (moveProgress == 0.0) {
       if (nextDir != Vector2.zero()) {
         int nextX = (gridPos.x + nextDir.x).toInt();
@@ -511,6 +556,7 @@ class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
       }
     }
 
+    // Interpolación de movimiento continuo
     if (moveDir != Vector2.zero()) {
       moveProgress += speed * dt;
 
@@ -528,14 +574,23 @@ class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
 
         if (gridPos.x < 0) {
           gridPos.x = (game.maxCols - 1).toDouble();
-          position.x = game.mazeOffsetX + gridPos.x * game.tileSize + 3;
         } else if (gridPos.x >= game.maxCols) {
           gridPos.x = 0;
-          position.x = game.mazeOffsetX + gridPos.x * game.tileSize + 3;
+        }
+        updatePixelPosition();
+
+        if (nextDir != Vector2.zero()) {
+          int nextX = (gridPos.x + nextDir.x).toInt();
+          int nextY = (gridPos.y + nextDir.y).toInt();
+          if (game.isWalkable(nextX, nextY, isGhost: false)) {
+            moveDir = nextDir.clone();
+            nextDir.setZero();
+          }
         }
       }
     }
 
+    // Colisiones con coleccionables
     game.children.whereType<Dot>().toList().forEach((dot) {
       if (dot.gridPos == gridPos) {
         dot.removeFromParent();
@@ -548,6 +603,9 @@ class PlayerPacman extends SpriteComponent with HasGameReference<PacManGame> {
   }
 }
 
+/// ==============================================================================
+/// ENTIDAD COLECCIONABLE: PUNTOS ESTÁNDAR Y ENERGIZANTES (POWER-UPS)
+/// ==============================================================================
 class Dot extends SpriteComponent with HasGameReference<PacManGame> {
   Vector2 gridPos;
   bool isPowerUp;
@@ -576,12 +634,16 @@ class Dot extends SpriteComponent with HasGameReference<PacManGame> {
   }
 }
 
+/// ==============================================================================
+/// ENTIDAD INTELIGENTE: FANTASMAS ([Ghost])
+/// Implementa IA de patrullaje, persecución por línea de visión y estados de pánico.
+/// ==============================================================================
 class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
   Vector2 gridPos;
   final Vector2 spawnGridPos = Vector2(9, 7);
   Vector2 moveDir = Vector2(0, -1);
   double moveProgress = 0.0;
-  final double speed = 4.5;
+  final double speed = 3.8;
   bool isScared = false;
   bool isDead = false;
   bool isLeavingSpawn = true;
@@ -597,7 +659,14 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
       sprite = Sprite(game.images.fromCache('ghost.png'));
     } catch (_) {}
     size = Vector2(18, 18);
-    position = Vector2(game.mazeOffsetX + gridPos.x * game.tileSize + 3, gridPos.y * game.tileSize + 3);
+    updatePixelPosition();
+  }
+
+  void updatePixelPosition() {
+    position = Vector2(
+      game.mazeOffsetX + gridPos.x * game.tileSize + 3,
+      gridPos.y * game.tileSize + 3,
+    );
   }
 
   @override
@@ -609,6 +678,7 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
     }
   }
 
+  /// Activa el estado de vulnerabilidad tras consumir un Power-Up.
   void triggerPanic() {
     if (!isDead && !isLeavingSpawn) {
       isScared = true;
@@ -632,7 +702,7 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
         isScared = false;
         isLeavingSpawn = true;
         gridPos = spawnGridPos.clone();
-        position = Vector2(game.mazeOffsetX + gridPos.x * game.tileSize + 3, gridPos.y * game.tileSize + 3);
+        updatePixelPosition();
         try {
           sprite = Sprite(game.images.fromCache('ghost.png'));
         } catch (_) {}
@@ -661,6 +731,7 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
       if (moveProgress >= 1.0) {
         gridPos.add(moveDir);
         moveProgress = 0.0;
+        updatePixelPosition();
         if (gridPos.y <= 6) {
           isLeavingSpawn = false;
         }
@@ -678,14 +749,19 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
       }
     }
 
+    // Selección de ruta con validación estricta obligatoria para evitar traspasar muros
     if (moveProgress == 0.0 && game.player.isMounted) {
       final player = game.player;
       bool hasVision = game.hasLineOfSight(gridPos, player.gridPos);
 
       if (hasVision && !isScared) {
-        moveDir = Vector2(player.gridPos.x > gridPos.x ? 1 : -1, 0);
-      } else if (hasVision && isScared) {
-        moveDir = Vector2(player.gridPos.x > gridPos.x ? -1 : 1, 0);
+        Vector2 idealDir = Vector2(player.gridPos.x > gridPos.x ? 1 : (player.gridPos.x < gridPos.x ? -1 : 0), 
+                                   player.gridPos.y > gridPos.y ? 1 : (player.gridPos.y < gridPos.y ? -1 : 0));
+        int nextX = (gridPos.x + idealDir.x).toInt();
+        int nextY = (gridPos.y + idealDir.y).toInt();
+        if (idealDir != Vector2.zero() && game.isWalkable(nextX, nextY, isGhost: true)) {
+          moveDir = idealDir;
+        }
       } else {
         List<Vector2> validDirs = [];
         for (var dir in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]) {
@@ -696,7 +772,9 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
         if (validDirs.isNotEmpty) {
           moveDir = validDirs[random.nextInt(validDirs.length)];
         } else {
-          moveDir = -moveDir;
+          if (game.isWalkable((gridPos.x - moveDir.x).toInt(), (gridPos.y - moveDir.y).toInt(), isGhost: true)) {
+            moveDir = -moveDir;
+          }
         }
       }
     }
@@ -716,13 +794,13 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
 
       if (gridPos.x < 0) {
         gridPos.x = (game.maxCols - 1).toDouble();
-        position.x = game.mazeOffsetX + gridPos.x * game.tileSize + 3;
       } else if (gridPos.x >= game.maxCols) {
         gridPos.x = 0;
-        position.x = game.mazeOffsetX + gridPos.x * game.tileSize + 3;
       }
+      updatePixelPosition();
     }
 
+    // Detección de colisiones contra el jugador
     if (toRect().overlaps(game.player.toRect())) {
       if (isScared) {
         isDead = true;
@@ -737,6 +815,9 @@ class Ghost extends SpriteComponent with HasGameReference<PacManGame> {
   }
 }
 
+/// ==============================================================================
+/// COMPONENTE ESTÁTICO: MUROS DEL LABERINTO
+/// ==============================================================================
 class Wall extends PositionComponent {
   Wall(Vector2 pos, Vector2 sz) {
     position = pos;

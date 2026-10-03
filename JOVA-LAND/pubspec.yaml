@@ -1,8 +1,8 @@
 name: pacman_juego
-description: "un capricho de jova."
+description: "JOVA-LAND: arcade de laberinto con los personajes de LA SANVI."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: ^3.13.4
@@ -13,6 +13,8 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   flame: ^1.38.2
+  flame_audio: ^2.12.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -22,9 +24,18 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/jova_logo.png
-    - assets/images/game_over.png
-    - assets/images/pacman.png
-    - assets/images/ghost.png
-    - assets/images/dot.png
-    - assets/images/niga.png
+    - assets/images/
+    - assets/audio/
+
+  fonts:
+    - family: PressStart2P
+      fonts:
+        - asset: assets/fonts/PressStart2P-Regular.ttf
+    - family: ChakraPetch
+      fonts:
+        - asset: assets/fonts/ChakraPetch-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/ChakraPetch-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/ChakraPetch-Bold.ttf
+          weight: 700

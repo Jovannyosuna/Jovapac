@@ -1,12 +1,12 @@
 {
-    "name": "pacman_juego",
-    "short_name": "pacman_juego",
+    "name": "JOVA-LAND",
+    "short_name": "JOVA-LAND",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#07060F",
+    "theme_color": "#07060F",
+    "description": "Arcade de laberinto neon.",
+    "orientation": "landscape",
     "prefer_related_applications": false,
     "icons": [
         {

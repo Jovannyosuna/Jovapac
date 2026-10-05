@@ -22,6 +22,10 @@
 //   3. Núcleo del juego (PacManGame)
 //   4. Menús superpuestos (Game Over y Victoria)
 //   5. Entidades: PlayerPacman, Dot, Ghost y Wall
+//   6. IA de fantasmas: modos globales, personalidades y toma de decisiones
+//   7. Velocidades: tabla relativa, túneles, modo asustado y Cruise Elroy
+//   8. Habilidades especiales: Imán (Blinky), Constructor (Pinky) y
+//      Láser (Inky y Clyde)
 //
 // RECURSOS REQUERIDOS (carpeta assets/images/, declarada en pubspec.yaml)
 //   pacman.png, ghost.png, dot.png, niga.png, mori.png,
@@ -269,6 +273,239 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Texto del marcador de récord.
   late TextComponent highScoreText;
 
+  /// Controlador global de modos de los fantasmas (Scatter / Chase / Frightened).
+  final GhostModeController modeController = GhostModeController();
+
+  /// Total de puntos al iniciar la partida.
+  int totalDots = 0;
+
+  /// Puntos que todavía quedan en el laberinto.
+  int dotsRemaining = 0;
+
+  /// Filas que tienen salida a los extremos del mapa (túneles laterales).
+  late final Set<int> tunnelRows = {
+    for (int r = 0; r < mazeGrid.length; r++)
+      if (mazeGrid[r].first != 1 || mazeGrid[r].last != 1) r
+  };
+
+  /// Cuántas columnas desde cada extremo cuentan como zona de túnel.
+  final int tunnelDepth = 6;
+
+  /// Nivel de Cruise Elroy de Blinky según los puntos restantes:
+  /// 0 = normal, 1 = Elroy 1, 2 = Elroy 2.
+  int get elroyLevel {
+    if (dotsRemaining <= (totalDots * GameSpeeds.elroy2DotsFraction).round()) {
+      return 2;
+    }
+    if (dotsRemaining <= (totalDots * GameSpeeds.elroy1DotsFraction).round()) {
+      return 1;
+    }
+    return 0;
+  }
+
+  /// Indica si una entidad que está en [gridPos], avanzando hacia [dir] con
+  /// [progress] (0.0 a 1.0), se encuentra dentro de un túnel lateral.
+  bool isInTunnel(Vector2 gridPos, Vector2 dir, double progress) {
+    final col = (gridPos.x + dir.x * progress).round();
+    final row = (gridPos.y + dir.y * progress).round();
+    if (!tunnelRows.contains(row)) return false;
+    return col < tunnelDepth || col >= maxCols - tunnelDepth;
+  }
+
+  // ---------------------------------------------------------------------------
+  // HABILIDADES ESPECIALES Y ESTADO ASUSTADO GRUPAL
+  // ---------------------------------------------------------------------------
+
+  /// Fantasmas activos por tipo (consulta rápida entre habilidades).
+  final Map<GhostType, Ghost> ghosts = {};
+
+  /// Casillas bloqueadas por paredes temporales ya sólidas.
+  final Set<int> solidWalls = {};
+
+  /// Paredes temporales activas o en aviso, por casilla.
+  final Map<int, TempWall> tempWalls = {};
+
+  /// Últimas casillas visitadas por Pac-Man (la más reciente al final).
+  final List<Vector2> pacTrail = [];
+
+  /// Intensidad de la atracción del Fantasma Imán (0 = inactiva, 1 = máxima).
+  double magnetStrength = 0.0;
+
+  /// Dirección unitaria desde Pac-Man hacia el Fantasma Imán.
+  Vector2 magnetDir = Vector2.zero();
+
+  /// Motivo de la derrota, para mostrarlo en el menú de Game Over.
+  String? deathCause;
+
+  int _ghostCombo = 0;
+  bool _ready = false;
+
+  /// Posición fraccionaria en la cuadrícula del centro de [c].
+  /// Un valor entero corresponde al centro exacto de una casilla.
+  Vector2 tilePosOf(PositionComponent c) => Vector2(
+        (c.position.x + c.size.x / 2 - mazeOffsetX) / tileSize - 0.5,
+        (c.position.y + c.size.y / 2 - 24) / tileSize - 0.5,
+      );
+
+  /// Registra una casilla visitada por Pac-Man (la usa el Fantasma Constructor).
+  void recordPacTile(Vector2 tile) {
+    if (pacTrail.isNotEmpty &&
+        pacTrail.last.x == tile.x &&
+        pacTrail.last.y == tile.y) {
+      return;
+    }
+    pacTrail.add(tile.clone());
+    if (pacTrail.length > 24) pacTrail.removeAt(0);
+  }
+
+  /// Se llama cuando Pac-Man come un power-up: activa el modo Frightened y
+  /// asusta a TODOS los fantasmas a la vez.
+  void onPowerUpEaten() {
+    modeController.startFrightened();
+    _ghostCombo = 0;
+    for (final g in children.whereType<Ghost>()) {
+      g.triggerPanic();
+    }
+  }
+
+  /// Puntos por comer un fantasma: 200, 400, 800 y 1600 con cada fantasma
+  /// consecutivo durante el mismo power-up.
+  int nextGhostEatScore() {
+    final points = 200 * (1 << min(_ghostCombo, 3));
+    _ghostCombo++;
+    return points;
+  }
+
+  /// Calcula la atracción del Fantasma Imán (Blinky) sobre Pac-Man.
+  void _updateMagnet() {
+    magnetStrength = 0.0;
+    final blinky = ghosts[GhostType.blinky];
+    if (blinky == null || !blinky.isMounted || !player.isMounted) return;
+    if (blinky.isDead || blinky.isLeavingSpawn || blinky.isScared) return;
+
+    final toBlinky = tilePosOf(blinky) - tilePosOf(player);
+    final dist = toBlinky.length;
+    if (dist > AbilityConfig.magnetRadiusTiles || dist < 0.001) return;
+
+    magnetStrength = 1.0 - dist / AbilityConfig.magnetRadiusTiles;
+    magnetDir = toBlinky / dist;
+  }
+
+  bool _entityTouchesTile(
+      Vector2 grid, Vector2 dir, double progress, int col, int row) {
+    if (grid.x.round() == col && grid.y.round() == row) return true;
+    if (progress > 0.0) {
+      return (grid.x + dir.x).round() == col && (grid.y + dir.y).round() == row;
+    }
+    return false;
+  }
+
+  /// Indica si Pac-Man o algún fantasma está en la casilla ([col], [row]) o
+  /// avanzando hacia ella.
+  bool isTileOccupied(int col, int row) {
+    if (player.isMounted &&
+        _entityTouchesTile(
+            player.gridPos, player.moveDir, player.moveProgress, col, row)) {
+      return true;
+    }
+    for (final g in children.whereType<Ghost>()) {
+      if (g.isDead) continue;
+      if (_entityTouchesTile(g.gridPos, g.moveDir, g.moveProgress, col, row)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Intenta que el Fantasma Constructor coloque una pared temporal en una
+  /// casilla por la que Pac-Man pasó hace unos pasos, para cortarle la
+  /// retirada. Devuelve `true` si se colocó.
+  bool tryPlaceBuilderWall() {
+    if (tempWalls.length >= AbilityConfig.builderMaxWalls) return false;
+    if (!player.isMounted || pacTrail.length < 6) return false;
+
+    final pacTile = tilePosOf(player);
+    for (final back in const [4, 5, 3, 6, 7]) {
+      final index = pacTrail.length - 1 - back;
+      if (index < 0) continue;
+      final col = pacTrail[index].x.toInt();
+      final row = pacTrail[index].y.toInt();
+      if (!_isValidBuilderTile(col, row, pacTile)) continue;
+
+      final wall = TempWall(col, row);
+      tempWalls[tileKey(col, row)] = wall;
+      add(wall);
+      return true;
+    }
+    return false;
+  }
+
+  /// Reglas de seguridad para colocar una pared temporal:
+  /// - Solo en pasillos (no muros ni casa de fantasmas ni zona de túnel).
+  /// - A una distancia mínima de Pac-Man y sin nadie encima.
+  /// - Sin dejar a Pac-Man encerrado en una zona demasiado pequeña.
+  bool _isValidBuilderTile(int col, int row, Vector2 pacTile) {
+    if (row < 0 || row >= mazeGrid.length || col < 0 || col >= maxCols) {
+      return false;
+    }
+    final cell = mazeGrid[row][col];
+    if (cell == 1 || cell == 2) return false;
+
+    final key = tileKey(col, row);
+    if (tempWalls.containsKey(key)) return false;
+    if (tunnelRows.contains(row) &&
+        (col < tunnelDepth || col >= maxCols - tunnelDepth)) {
+      return false;
+    }
+    if (Vector2(col.toDouble(), row.toDouble()).distanceTo(pacTile) <
+        AbilityConfig.builderMinPacDistance) {
+      return false;
+    }
+    if (isTileOccupied(col, row)) return false;
+
+    final startCol = max(0, min(maxCols - 1, pacTile.x.round()));
+    final startRow = max(0, min(mazeGrid.length - 1, pacTile.y.round()));
+    return _reachableCount(startCol, startRow, key) >=
+        AbilityConfig.builderMinReachable;
+  }
+
+  /// Cuenta (hasta [limit]) las casillas alcanzables desde el punto inicial
+  /// si [blockedKey] estuviera bloqueada. Usa búsqueda en anchura (BFS).
+  int _reachableCount(int startCol, int startRow, int blockedKey,
+      {int limit = 80}) {
+    final startKey = tileKey(startCol, startRow);
+    final visited = <int>{startKey};
+    final queue = <int>[startKey];
+    var head = 0;
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+
+    while (head < queue.length && visited.length < limit) {
+      final key = queue[head++];
+      final col = key % 100;
+      final row = key ~/ 100;
+      for (final d in dirs) {
+        var nc = col + d[0];
+        final nr = row + d[1];
+        if (nc < 0) {
+          nc = maxCols - 1;
+        } else if (nc >= maxCols) {
+          nc = 0;
+        }
+        if (!isWalkable(nc, nr)) continue;
+        final nk = tileKey(nc, nr);
+        if (nk == blockedKey || visited.contains(nk)) continue;
+        visited.add(nk);
+        queue.add(nk);
+      }
+    }
+    return visited.length;
+  }
+
   @override
   Color backgroundColor() => const Color(0xFF000000);
 
@@ -365,6 +602,20 @@ class PacManGame extends FlameGame with KeyboardEvents {
     } catch (e, st) {
       debugPrint('Error en startGame: $e\n$st');
     }
+    _ready = true;
+  }
+
+  /// Avanza el ciclo global de modos de los fantasmas mientras la partida
+  /// está en curso.
+  @override
+  void update(double dt) {
+    if (_ready && !isGameOver && !isGameWon) {
+      _updateMagnet();
+    }
+    super.update(dt);
+    if (!isGameOver && !isGameWon) {
+      modeController.update(dt);
+    }
   }
 
   /// Inicia o reinicia una partida.
@@ -375,12 +626,28 @@ class PacManGame extends FlameGame with KeyboardEvents {
     score = 0;
     isGameOver = false;
     isGameWon = false;
+    modeController.reset();
+    totalDots = mazeGrid.expand((r) => r).where((c) => c == 0 || c == 3).length;
+    dotsRemaining = totalDots;
+    ghosts.clear();
+    solidWalls.clear();
+    tempWalls.clear();
+    pacTrail.clear();
+    magnetStrength = 0.0;
+    deathCause = null;
+    _ghostCombo = 0;
     scoreText.text = 'SCORE: $score';
     overlays.remove('GameOverMenu');
     overlays.remove('GameWinMenu');
 
     children
-        .where((c) => c is PlayerPacman || c is Ghost || c is Dot || c is Wall)
+        .where((c) =>
+            c is PlayerPacman ||
+            c is Ghost ||
+            c is Dot ||
+            c is Wall ||
+            c is TempWall ||
+            c is LaserLink)
         .toList()
         .forEach((c) => c.removeFromParent());
 
@@ -388,11 +655,17 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
     player = PlayerPacman(Vector2(13, 12));
     add(player);
+    recordPacTile(player.gridPos);
 
-    add(Ghost(Vector2(13, 7)));
-    add(Ghost(Vector2(14, 7)));
-    add(Ghost(Vector2(13, 8)));
-    add(Ghost(Vector2(14, 8)));
+    // Cada fantasma tiene su personalidad y sale de la base en un momento
+    // distinto (releaseDelay, en segundos).
+    add(Ghost(Vector2(13, 7), GhostType.blinky, releaseDelay: 0));
+    add(Ghost(Vector2(14, 7), GhostType.pinky, releaseDelay: 2));
+    add(Ghost(Vector2(13, 8), GhostType.inky, releaseDelay: 6));
+    add(Ghost(Vector2(14, 8), GhostType.clyde, releaseDelay: 10));
+
+    // Láser que une a Inky (3) y Clyde (4).
+    add(LaserLink());
   }
 
   /// Suma [points] a la puntuación, actualiza el récord y verifica la victoria.
@@ -407,7 +680,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
       highScoreText.text = 'HIGH SCORE: $highScore';
     }
 
-    if (children.whereType<Dot>().isEmpty) {
+    if (dotsRemaining <= 0) {
       triggerGameWin();
     }
   }
@@ -443,6 +716,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     int cell = mazeGrid[row][col];
     if (cell == 1) return false;
     if (cell == 2 && !isGhost) return false;
+    if (solidWalls.contains(tileKey(col, row))) return false; // Pared temporal
     return true;
   }
 
@@ -476,9 +750,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
   }
 
   /// Termina la partida por derrota y muestra el menú de Game Over.
-  void triggerGameOver() {
+  void triggerGameOver({String? cause}) {
     if (isGameOver || isGameWon) return;
     isGameOver = true;
+    deathCause = cause;
     overlays.add('GameOverMenu');
   }
 
@@ -550,6 +825,13 @@ class GameOverOverlay extends StatelessWidget {
               'Puntuación: ${game.score}',
               style: const TextStyle(fontSize: 18, color: Colors.white),
             ),
+            if (game.deathCause != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                game.deathCause!,
+                style: const TextStyle(fontSize: 14, color: Colors.redAccent),
+              ),
+            ],
             const SizedBox(height: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -636,6 +918,46 @@ class GameWinOverlay extends StatelessWidget {
 // =============================================================================
 
 // -----------------------------------------------------------------------------
+// ETIQUETAS SOBRE LAS ENTIDADES
+// -----------------------------------------------------------------------------
+
+/// Dibuja una etiqueta de texto centrada justo encima de una entidad.
+///
+/// Usa un contorno negro para que se lea sobre los muros azules y el fondo.
+/// Debe llamarse dentro de `render`, con el origen en la esquina superior
+/// izquierda de la entidad.
+void drawEntityLabel(
+  Canvas canvas,
+  String text,
+  Vector2 entitySize,
+  Color color, {
+  double fontSize = 8,
+}) {
+  final anchorPoint = Vector2(entitySize.x / 2, -1);
+
+  final outline = TextPaint(
+    style: TextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.bold,
+      foreground: Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = Colors.black,
+    ),
+  );
+  final fill = TextPaint(
+    style: TextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.bold,
+      color: color,
+    ),
+  );
+
+  outline.render(canvas, text, anchorPoint, anchor: Anchor.bottomCenter);
+  fill.render(canvas, text, anchorPoint, anchor: Anchor.bottomCenter);
+}
+
+// -----------------------------------------------------------------------------
 // PLAYERPACMAN: JUGADOR
 // -----------------------------------------------------------------------------
 
@@ -658,11 +980,33 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
   /// Dirección solicitada por el jugador, pendiente de aplicarse.
   Vector2 nextDir = Vector2.zero();
 
+  /// Última dirección en la que se movió (la usan Pinky e Inky para apuntar).
+  /// Se conserva aunque Pac-Man esté detenido.
+  Vector2 facing = Vector2(-1, 0);
+
   /// Avance hacia la siguiente casilla (0.0 a 1.0).
   double moveProgress = 0.0;
 
-  /// Velocidad en casillas por segundo.
-  final double speed = 4.0;
+  /// Velocidad actual en casillas por segundo.
+  ///
+  /// Sube durante el modo Frightened y se reduce al 50 % dentro de los túneles.
+  double get speed {
+    final percent = game.modeController.isFrightened
+        ? GameSpeeds.pacmanFrightened
+        : GameSpeeds.pacman;
+    var tiles = GameSpeeds.tiles(percent);
+    if (game.isInTunnel(gridPos, moveDir, moveProgress)) {
+      tiles *= GameSpeeds.tunnelFactor;
+    }
+
+    // Fantasma Imán: Blinky acelera a Pac-Man si avanza hacia él y lo frena
+    // si se aleja. Moverse de lado (perpendicular) no cambia la velocidad.
+    if (game.magnetStrength > 0 && moveDir != Vector2.zero()) {
+      final pull = moveDir.dot(game.magnetDir); // +1 hacia Blinky, -1 alejándose
+      tiles *= 1.0 + AbilityConfig.magnetMaxPull * game.magnetStrength * pull;
+    }
+    return tiles;
+  }
 
   PlayerPacman(this.gridPos);
 
@@ -700,6 +1044,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
         Paint()..color = Colors.yellow,
       );
     }
+    drawEntityLabel(canvas, 'JUGADOR', size, Colors.yellow, fontSize: 7);
   }
 
   @override
@@ -749,6 +1094,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
           gridPos.x = 0;
         }
         updatePixelPosition();
+        game.recordPacTile(gridPos);
 
         // Aplica de inmediato el giro pendiente si ya es posible.
         if (nextDir != Vector2.zero()) {
@@ -762,13 +1108,17 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
       }
     }
 
+    if (moveDir != Vector2.zero()) facing = moveDir.clone();
+
     // Recolección de puntos: normal = 10 pts, power-up = 100 pts + pánico.
     game.children.whereType<Dot>().toList().forEach((dot) {
-      if (dot.gridPos == gridPos) {
+      if (!dot.eaten && dot.gridPos == gridPos) {
+        dot.eaten = true;
         dot.removeFromParent();
+        game.dotsRemaining--;
         game.addScore(dot.isPowerUp ? 100 : 10);
         if (dot.isPowerUp) {
-          game.children.whereType<Ghost>().forEach((g) => g.triggerPanic());
+          game.onPowerUpEaten(); // Asusta a todos los fantasmas a la vez
         }
       }
     });
@@ -792,6 +1142,9 @@ class Dot extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Indica si es un punto grande (power-up).
   bool isPowerUp;
+
+  /// Marca el punto como ya comido (evita contarlo dos veces).
+  bool eaten = false;
 
   Dot(this.gridPos, {this.isPowerUp = false});
 
@@ -824,18 +1177,661 @@ class Dot extends PositionComponent with HasGameReference<PacManGame> {
 }
 
 // -----------------------------------------------------------------------------
-// GHOST: FANTASMA
+// HABILIDADES ESPECIALES
 // -----------------------------------------------------------------------------
 
-/// Enemigo del juego. Tiene cuatro estados visuales y de comportamiento:
+/// Parámetros de las habilidades especiales. Ajusta aquí la dificultad.
+class AbilityConfig {
+  AbilityConfig._();
+
+  // --- Fantasma Imán (Blinky) ---------------------------------------------
+  /// Radio de atracción, en casillas.
+  static const double magnetRadiusTiles = 3.0;
+
+  /// Variación máxima de la velocidad de Pac-Man (0.30 = +-30 %).
+  static const double magnetMaxPull = 0.30;
+
+  // --- Fantasma Constructor (Pinky) ----------------------------------------
+  /// Espera inicial antes de la primera pared (s).
+  static const double builderFirstDelay = 6.0;
+
+  /// Tiempo entre una pared y la siguiente (s).
+  static const double builderCooldown = 8.0;
+
+  /// Aviso parpadeante antes de que la pared se vuelva sólida (s).
+  static const double builderWarningSeconds = 1.0;
+
+  /// Tiempo que la pared permanece sólida (s).
+  static const double builderDurationSeconds = 6.0;
+
+  /// Máximo de paredes temporales simultáneas.
+  static const int builderMaxWalls = 2;
+
+  /// Distancia mínima (casillas) entre Pac-Man y una pared nueva.
+  static const double builderMinPacDistance = 3.0;
+
+  /// Casillas que Pac-Man debe poder alcanzar tras colocar la pared, para
+  /// garantizar que nunca quede encerrado.
+  static const int builderMinReachable = 60;
+
+  // --- Láser Inky-Clyde -----------------------------------------------------
+  /// Duración del láser activo (s).
+  static const double laserActiveSeconds = 8.0;
+
+  /// Duración del enfriamiento (s).
+  static const double laserCooldownSeconds = 15.0;
+
+  /// Aviso (línea punteada, sin peligro) al final del enfriamiento (s).
+  static const double laserWarningSeconds = 1.5;
+
+  /// Distancia (px) a la que el rayo alcanza a Pac-Man.
+  static const double laserHitRadius = 6.0;
+}
+
+/// Clave única de una casilla: `fila * 100 + columna`.
+int tileKey(int col, int row) => row * 100 + col;
+
+double _cross(Vector2 o, Vector2 a, Vector2 b) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+/// Distancia de un punto [p] al segmento [a]-[b].
+double _distPointToSegment(Vector2 p, Vector2 a, Vector2 b) {
+  final ab = b - a;
+  final len2 = ab.length2;
+  if (len2 == 0) return p.distanceTo(a);
+  final t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0).toDouble();
+  return p.distanceTo(a + ab * t);
+}
+
+/// Indica si los segmentos [p1]-[p2] y [q1]-[q2] se cruzan.
+bool _segmentsIntersect(Vector2 p1, Vector2 p2, Vector2 q1, Vector2 q2) {
+  final d1 = _cross(q1, q2, p1);
+  final d2 = _cross(q1, q2, p2);
+  final d3 = _cross(p1, p2, q1);
+  final d4 = _cross(p1, p2, q2);
+  return (d1 * d2 < 0) && (d3 * d4 < 0);
+}
+
+Vector2 _centerOf(PositionComponent c) =>
+    Vector2(c.position.x + c.size.x / 2, c.position.y + c.size.y / 2);
+
+// -----------------------------------------------------------------------------
+// FANTASMA CONSTRUCTOR: PARED TEMPORAL
+// -----------------------------------------------------------------------------
+
+/// Pared temporal colocada por Pinky.
 ///
-/// 1. **Saliendo de la base** ([isLeavingSpawn]): sube hasta salir de la casa.
-/// 2. **Normal**: persigue al jugador si lo ve; si no, deambula al azar.
-/// 3. **Asustado** ([isScared], sprite "niga"): huye del jugador y puede ser
-///    comido. Dura [scaredTimer] segundos (8 s).
-/// 4. **Muerto** ([isDead], sprite "mori"): vuela en línea recta a la base y,
-///    al llegar, vuelve a ser un fantasma normal.
+/// Ciclo de vida:
+/// 1. **Aviso** ([AbilityConfig.builderWarningSeconds]): contorno naranja
+///    parpadeante. Todavía se puede cruzar.
+/// 2. **Sólida** ([AbilityConfig.builderDurationSeconds]): bloquea a Pac-Man y
+///    a los fantasmas. Parpadea durante el último segundo.
+/// 3. Desaparece.
+///
+/// Si alguien está sobre la casilla (o entrando) cuando termina el aviso, la
+/// pared espera un momento para no atrapar a nadie dentro.
+class TempWall extends PositionComponent with HasGameReference<PacManGame> {
+  TempWall(this.col, this.row);
+
+  final int col;
+  final int row;
+
+  bool _solid = false;
+  double _warnTimer = 0.0;
+  double _solidTimer = 0.0;
+
+  @override
+  Future<void> onLoad() async {
+    super.onLoad();
+    size = Vector2(game.tileSize, game.tileSize);
+    position = Vector2(
+      game.mazeOffsetX + col * game.tileSize,
+      24 + row * game.tileSize,
+    );
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    if (game.isGameOver || game.isGameWon) return;
+
+    if (!_solid) {
+      _warnTimer += dt;
+      if (_warnTimer >= AbilityConfig.builderWarningSeconds) {
+        if (game.isTileOccupied(col, row)) {
+          _warnTimer = AbilityConfig.builderWarningSeconds - 0.3; // Espera
+        } else {
+          _solid = true;
+          game.solidWalls.add(tileKey(col, row));
+        }
+      }
+    } else {
+      _solidTimer += dt;
+      if (_solidTimer >= AbilityConfig.builderDurationSeconds) {
+        removeFromParent();
+      }
+    }
+  }
+
+  @override
+  void onRemove() {
+    final key = tileKey(col, row);
+    game.solidWalls.remove(key);
+    if (game.tempWalls[key] == this) {
+      game.tempWalls.remove(key);
+    }
+    super.onRemove();
+  }
+
+  @override
+  void render(Canvas canvas) {
+    final rect = size.toRect();
+
+    if (!_solid) {
+      final blink = (_warnTimer * 6).floor().isEven;
+      canvas.drawRect(
+        rect.deflate(2),
+        Paint()
+          ..color = Colors.orangeAccent.withAlpha(blink ? 220 : 70)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+      return;
+    }
+
+    final left = AbilityConfig.builderDurationSeconds - _solidTimer;
+    if (left < 1.0 && (left * 8).floor().isEven) return; // Parpadeo final
+
+    canvas.drawRect(rect, Paint()..color = const Color(0xFF8A0F5E));
+    canvas.drawRect(
+      rect.deflate(3),
+      Paint()
+        ..color = Colors.pinkAccent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ENLACE LÁSER INKY-CLYDE
+// -----------------------------------------------------------------------------
+
+/// Rayo láser que une permanentemente a Inky (3) y Clyde (4).
+///
+/// Ciclo de [AbilityConfig.laserActiveSeconds] activo +
+/// [AbilityConfig.laserCooldownSeconds] de enfriamiento. Durante los últimos
+/// [AbilityConfig.laserWarningSeconds] del enfriamiento se muestra una línea
+/// punteada de aviso (sin peligro).
+///
+/// Mientras está ACTIVO, Pac-Man muere al instante si queda sobre la línea o
+/// si la atraviesa entre dos frames (se revisa el recorrido completo de Pac-Man
+/// en cada frame, así no se puede "saltar" el rayo por moverse rápido).
+///
+/// El rayo solo existe cuando ambos fantasmas están operativos (vivos, fuera
+/// de la base y sin estar asustados). El ciclo se pausa durante Frightened.
+class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
+  LaserLink() {
+    priority = 50; // Se dibuja por encima de las demás entidades.
+  }
+
+  static const double _cycle =
+      AbilityConfig.laserActiveSeconds + AbilityConfig.laserCooldownSeconds;
+
+  /// Tiempo dentro del ciclo. Empieza al inicio del enfriamiento para dar
+  /// margen al jugador al comenzar la partida.
+  double _t = AbilityConfig.laserActiveSeconds;
+
+  double _pulse = 0.0;
+  Vector2? _prevPac;
+
+  bool get _isActive => _t < AbilityConfig.laserActiveSeconds;
+  bool get _isWarning => !_isActive && _t >= _cycle - AbilityConfig.laserWarningSeconds;
+
+  bool _operational(Ghost? g) =>
+      g != null && g.isMounted && !g.isDead && !g.isLeavingSpawn && !g.isScared;
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    if (game.isGameOver || game.isGameWon) return;
+
+    // El ciclo se pausa mientras los fantasmas están asustados.
+    if (!game.modeController.isFrightened) {
+      _t += dt;
+      if (_t >= _cycle) _t -= _cycle;
+    }
+    _pulse += dt;
+
+    final pac = game.player.isMounted ? _centerOf(game.player) : null;
+    final inky = game.ghosts[GhostType.inky];
+    final clyde = game.ghosts[GhostType.clyde];
+
+    if (pac != null && _isActive && _operational(inky) && _operational(clyde)) {
+      final a = _centerOf(inky!);
+      final b = _centerOf(clyde!);
+
+      final onBeam = _distPointToSegment(pac, a, b) <= AbilityConfig.laserHitRadius;
+      final crossed = _prevPac != null && _segmentsIntersect(_prevPac!, pac, a, b);
+
+      if (onBeam || crossed) {
+        game.triggerGameOver(cause: 'Te alcanzó el láser de Inky (3) y Clyde (4)');
+      }
+    }
+    _prevPac = pac;
+  }
+
+  @override
+  void render(Canvas canvas) {
+    _renderHud(canvas);
+
+    final inky = game.ghosts[GhostType.inky];
+    final clyde = game.ghosts[GhostType.clyde];
+    if (!_operational(inky) || !_operational(clyde)) return;
+
+    final a = _centerOf(inky!);
+    final b = _centerOf(clyde!);
+
+    if (_isActive) {
+      final pulse = 0.5 + 0.5 * sin(_pulse * 14);
+      canvas.drawLine(
+        Offset(a.x, a.y),
+        Offset(b.x, b.y),
+        Paint()
+          ..color = Colors.redAccent.withAlpha((80 + 90 * pulse).round())
+          ..strokeWidth = 7
+          ..strokeCap = StrokeCap.round,
+      );
+      canvas.drawLine(
+        Offset(a.x, a.y),
+        Offset(b.x, b.y),
+        Paint()
+          ..color = Colors.white
+          ..strokeWidth = 2
+          ..strokeCap = StrokeCap.round,
+      );
+    } else if (_isWarning) {
+      // Línea punteada de aviso (inofensiva).
+      final dir = b - a;
+      final len = dir.length;
+      if (len < 1) return;
+      final unit = dir / len;
+      final paint = Paint()
+        ..color = Colors.redAccent.withAlpha(150)
+        ..strokeWidth = 1.5;
+      for (double d = 0; d < len; d += 10) {
+        final p1 = a + unit * d;
+        final p2 = a + unit * min(d + 5, len);
+        canvas.drawLine(Offset(p1.x, p1.y), Offset(p2.x, p2.y), paint);
+      }
+    }
+  }
+
+  /// Contador del láser, centrado en la parte superior.
+  void _renderHud(Canvas canvas) {
+    String text;
+    Color color;
+    if (game.modeController.isFrightened) {
+      text = 'LÁSER 3-4: EN PAUSA';
+      color = Colors.grey;
+    } else if (_isActive) {
+      final left = AbilityConfig.laserActiveSeconds - _t;
+      text = 'LÁSER 3-4: ACTIVO ${left.toStringAsFixed(1)}s';
+      color = Colors.redAccent;
+    } else if (_isWarning) {
+      text = 'LÁSER 3-4: ¡CARGANDO!';
+      color = Colors.orangeAccent;
+    } else {
+      final left = _cycle - _t;
+      text = 'LÁSER 3-4: LISTO EN ${left.toStringAsFixed(0)}s';
+      color = Colors.cyanAccent;
+    }
+
+    TextPaint(
+      style: TextStyle(
+        color: color,
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+      ),
+    ).render(
+      canvas,
+      text,
+      Vector2(PacManGame.virtualWidth / 2, 4),
+      anchor: Anchor.topCenter,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// VELOCIDADES
+// -----------------------------------------------------------------------------
+
+/// Tabla central de velocidades del juego.
+///
+/// Todas las velocidades se expresan como un porcentaje de [base]
+/// (casillas por segundo al 100 %). Para ajustar la dificultad basta con
+/// cambiar estos valores.
+class GameSpeeds {
+  GameSpeeds._();
+
+  /// Casillas por segundo al 100 %.
+  static const double base = 5.0;
+
+  /// Pac-Man en condiciones normales.
+  static const double pacman = 0.80;
+
+  /// Pac-Man mientras los fantasmas están asustados (corre un poco más).
+  static const double pacmanFrightened = 0.90;
+
+  /// Fantasma en condiciones normales.
+  static const double ghost = 0.70;
+
+  /// Fantasma asustado: cae drásticamente.
+  static const double ghostFrightened = 0.40;
+
+  /// Blinky en Cruise Elroy 1 (igual de rápido que Pac-Man).
+  static const double elroy1 = 0.80;
+
+  /// Blinky en Cruise Elroy 2 (más rápido que Pac-Man).
+  static const double elroy2 = 0.88;
+
+  /// Multiplicador dentro de los túneles laterales (50 %), para Pac-Man y
+  /// para los fantasmas.
+  static const double tunnelFactor = 0.50;
+
+  /// Cruise Elroy 1 se activa cuando queda este porcentaje de puntos.
+  static const double elroy1DotsFraction = 0.15;
+
+  /// Cruise Elroy 2 se activa cuando queda este porcentaje de puntos.
+  static const double elroy2DotsFraction = 0.07;
+
+  /// Convierte un porcentaje de [base] a casillas por segundo.
+  static double tiles(double percent) => base * percent;
+}
+
+/// Si es `true`, Blinky en Cruise Elroy ignora el modo Scatter y sigue
+/// persiguiendo a Pac-Man, como en el original.
+const bool kElroyIgnoresScatter = true;
+
+// -----------------------------------------------------------------------------
+// IA DE FANTASMAS (1/3): MODOS GLOBALES (MÁQUINA DE ESTADOS)
+// -----------------------------------------------------------------------------
+
+/// Modos globales de comportamiento de los fantasmas.
+///
+/// - [scatter]: cada fantasma se dirige a su esquina asignada.
+/// - [chase]: cada fantasma persigue según su propia personalidad.
+/// - [frightened]: los fantasmas huyen al azar y pueden ser comidos.
+enum GhostMode { scatter, chase, frightened }
+
+/// Controla el ciclo global de modos.
+///
+/// El ciclo base alterna Scatter y Chase según [schedule] (en segundos). El
+/// modo Frightened se superpone al ciclo: mientras dura, el reloj del ciclo
+/// base se pausa, igual que en el Pac-Man original.
+///
+/// Cada vez que debe ocurrir una inversión de dirección (cambio entre Scatter
+/// y Chase, o inicio de Frightened) se incrementa [reversalTick]. Cada
+/// fantasma compara ese contador con el último que vio y, si cambió, da la
+/// vuelta en la siguiente casilla.
+class GhostModeController {
+  GhostModeController({
+    this.schedule = const [7, 20, 7, 20, 5, 20, 5, double.infinity],
+    this.frightenedDuration = 8.0,
+  });
+
+  /// Duración (s) de cada fase: Scatter, Chase, Scatter, Chase, ...
+  /// La última fase es infinita (Chase permanente).
+  final List<double> schedule;
+
+  /// Duración (s) del modo Frightened.
+  final double frightenedDuration;
+
+  int _phase = 0;
+  double _phaseTimer = 0.0;
+  double _frightenedTimer = 0.0;
+  int _reversalTick = 0;
+
+  /// Modo del ciclo base (sin considerar Frightened).
+  GhostMode get baseMode =>
+      _phase.isEven ? GhostMode.scatter : GhostMode.chase;
+
+  /// Indica si el modo Frightened está activo.
+  bool get isFrightened => _frightenedTimer > 0;
+
+  /// Modo efectivo actual.
+  GhostMode get mode => isFrightened ? GhostMode.frightened : baseMode;
+
+  /// Contador de inversiones de dirección pendientes (ver descripción de clase).
+  int get reversalTick => _reversalTick;
+
+  /// Segundos que le quedan al modo Frightened (0 si no está activo).
+  double get frightenedTimeLeft => _frightenedTimer;
+
+  /// Reinicia el ciclo (nueva partida).
+  void reset() {
+    _phase = 0;
+    _phaseTimer = 0.0;
+    _frightenedTimer = 0.0;
+    _reversalTick = 0;
+  }
+
+  /// Avanza los temporizadores. Llamar una vez por frame.
+  void update(double dt) {
+    if (isFrightened) {
+      _frightenedTimer = max(0.0, _frightenedTimer - dt);
+      return; // El ciclo Scatter/Chase queda pausado.
+    }
+    if (_phase >= schedule.length - 1) return; // Última fase (infinita).
+
+    _phaseTimer += dt;
+    if (_phaseTimer >= schedule[_phase]) {
+      _phaseTimer = 0.0;
+      _phase++;
+      _reversalTick++; // Scatter <-> Chase obliga a dar la vuelta.
+    }
+  }
+
+  /// Activa el modo Frightened (al comer un power-up).
+  void startFrightened() {
+    _frightenedTimer = frightenedDuration;
+    _reversalTick++; // Los fantasmas dan la vuelta al asustarse.
+  }
+}
+
+// -----------------------------------------------------------------------------
+// IA DE FANTASMAS (2/3): PERSONALIDADES Y CÁLCULO DE CASILLA OBJETIVO
+// -----------------------------------------------------------------------------
+
+/// Los cuatro fantasmas, identificados por su personalidad clásica.
+///
+/// - [blinky]: perseguidor directo.
+/// - [pinky]: emboscador.
+/// - [inky]: estratega (flanqueo).
+/// - [clyde]: tímido / errante.
+enum GhostType { blinky, pinky, inky, clyde }
+
+/// Si es `true`, Pinky e Inky replican el error de desbordamiento del
+/// Pac-Man original: cuando Pac-Man mira hacia arriba, el objetivo también se
+/// desplaza a la izquierda. Por defecto está desactivado.
+const bool kEmulateOriginalOverflowBug = false;
+
+/// Datos que necesita una personalidad para calcular su objetivo.
+class GhostContext {
+  const GhostContext({
+    required this.ghostTile,
+    required this.pacTile,
+    required this.pacDir,
+    required this.blinkyTile,
+  });
+
+  /// Casilla del fantasma que calcula.
+  final Vector2 ghostTile;
+
+  /// Casilla actual de Pac-Man.
+  final Vector2 pacTile;
+
+  /// Última dirección en la que se movió Pac-Man.
+  final Vector2 pacDir;
+
+  /// Casilla de Blinky (la usa Inky para su vector de flanqueo).
+  final Vector2 blinkyTile;
+}
+
+/// Casilla que está [tiles] casillas delante de [origin] en dirección [dir].
+Vector2 _tilesAhead(Vector2 origin, Vector2 dir, int tiles) {
+  final t = origin + dir * tiles.toDouble();
+  if (kEmulateOriginalOverflowBug && dir.y < 0) {
+    t.x -= tiles;
+  }
+  return t;
+}
+
+/// Estrategia de objetivo de un fantasma.
+abstract class GhostPersonality {
+  const GhostPersonality();
+
+  /// Color de respaldo si no hay sprite disponible.
+  Color get color;
+
+  /// Sprite propio del fantasma. Si no existe, se usa `ghost.png`.
+  String get spriteAsset;
+
+  /// Esquina a la que se dirige en modo Scatter (puede estar fuera del mapa,
+  /// como en el original, para que rodee la esquina).
+  Vector2 get scatterTarget;
+
+  /// Casilla objetivo en modo Chase.
+  Vector2 chaseTarget(GhostContext c);
+
+  /// Devuelve la personalidad correspondiente a [type].
+  static GhostPersonality of(GhostType type) {
+    switch (type) {
+      case GhostType.blinky:
+        return const BlinkyPersonality();
+      case GhostType.pinky:
+        return const PinkyPersonality();
+      case GhostType.inky:
+        return const InkyPersonality();
+      case GhostType.clyde:
+        return const ClydePersonality();
+    }
+  }
+}
+
+/// Blinky: su objetivo es siempre la casilla actual de Pac-Man.
+class BlinkyPersonality extends GhostPersonality {
+  const BlinkyPersonality();
+
+  @override
+  Color get color => Colors.red;
+
+  @override
+  String get spriteAsset => 'ghost.png';
+
+  @override
+  Vector2 get scatterTarget => Vector2(25, -2); // Arriba a la derecha
+
+  @override
+  Vector2 chaseTarget(GhostContext c) => c.pacTile.clone();
+}
+
+/// Pinky: apunta 4 casillas por delante de la dirección de Pac-Man.
+class PinkyPersonality extends GhostPersonality {
+  const PinkyPersonality();
+
+  @override
+  Color get color => Colors.pinkAccent;
+
+  @override
+  String get spriteAsset => 'ghost_pinky.png';
+
+  @override
+  Vector2 get scatterTarget => Vector2(1, -2); // Arriba a la izquierda
+
+  @override
+  Vector2 chaseTarget(GhostContext c) => _tilesAhead(c.pacTile, c.pacDir, 4);
+}
+
+/// Inky: usa a Pac-Man y a Blinky para formar un vector de flanqueo.
+///
+/// 1. Toma el punto "pivote": 2 casillas por delante de Pac-Man.
+/// 2. Traza el vector desde Blinky hasta el pivote.
+/// 3. Duplica ese vector: el objetivo es `pivote + (pivote - blinky)`.
+class InkyPersonality extends GhostPersonality {
+  const InkyPersonality();
+
+  @override
+  Color get color => Colors.cyanAccent;
+
+  @override
+  String get spriteAsset => 'ghost_inky.png';
+
+  @override
+  Vector2 get scatterTarget => Vector2(26, 17); // Abajo a la derecha
+
+  @override
+  Vector2 chaseTarget(GhostContext c) {
+    final pivot = _tilesAhead(c.pacTile, c.pacDir, 2);
+    return pivot * 2.0 - c.blinkyTile;
+  }
+}
+
+/// Clyde: persigue a Pac-Man si está a más de 8 casillas; si está a 8 o
+/// menos, se retira hacia su esquina.
+class ClydePersonality extends GhostPersonality {
+  const ClydePersonality();
+
+  @override
+  Color get color => Colors.orange;
+
+  @override
+  String get spriteAsset => 'ghost_clyde.png';
+
+  @override
+  Vector2 get scatterTarget => Vector2(0, 17); // Abajo a la izquierda
+
+  @override
+  Vector2 chaseTarget(GhostContext c) {
+    final distance = c.ghostTile.distanceTo(c.pacTile);
+    return distance > 8 ? c.pacTile.clone() : scatterTarget;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// IA DE FANTASMAS (3/3): ENTIDAD FANTASMA
+// -----------------------------------------------------------------------------
+
+/// Enemigo del juego. Combina el estado individual del fantasma con el modo
+/// global de [GhostModeController]:
+///
+/// 1. **Esperando / saliendo de la base** ([isLeavingSpawn]): espera su turno
+///    de salida ([releaseDelay]) y sube hasta salir de la casa.
+/// 2. **Normal**: en cada intersección elige la casilla vecina que minimiza la
+///    distancia a su objetivo (Scatter o Chase según el modo global).
+/// 3. **Asustado** ([isScared], sprite "niga"): elige direcciones al azar, va
+///    más lento y puede ser comido.
+/// 4. **Muerto** ([isDead], sprite "mori"): vuela en línea recta a la base y
+///    vuelve a salir como fantasma normal.
+///
+/// Reglas de movimiento:
+/// - Nunca da la vuelta en U, salvo cuando el modo global lo exige (cambio
+///   Scatter/Chase o inicio de Frightened) o en un callejón sin salida.
+/// - No puede volver a entrar a la casa de fantasmas mientras está vivo.
 class Ghost extends PositionComponent with HasGameReference<PacManGame> {
+  Ghost(this.gridPos, this.type, {double releaseDelay = 0.0})
+      : personality = GhostPersonality.of(type),
+        _releaseTimer = releaseDelay;
+
+  /// Personalidad de este fantasma.
+  final GhostType type;
+
+  /// Estrategia de objetivo asociada a [type].
+  final GhostPersonality personality;
+
+  /// Número visible del fantasma: 1 = Blinky, 2 = Pinky, 3 = Inky, 4 = Clyde.
+  int get number => type.index + 1;
+
   /// Posición actual en coordenadas de la cuadrícula (columna, fila).
   Vector2 gridPos;
 
@@ -848,8 +1844,38 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   /// Avance hacia la siguiente casilla (0.0 a 1.0).
   double moveProgress = 0.0;
 
-  /// Velocidad normal en casillas por segundo.
-  final double speed = 3.5;
+  /// Velocidad normal de un fantasma, en casillas por segundo.
+  double get speed => GameSpeeds.tiles(GameSpeeds.ghost);
+
+  /// Velocidad actual en casillas por segundo, según el estado:
+  /// - Asustado: velocidad muy reducida.
+  /// - Blinky: sube con Cruise Elroy 1 y 2.
+  /// - Dentro de un túnel lateral: se reduce al 50 %.
+  double _currentSpeed() {
+    double percent;
+    if (isScared) {
+      percent = GameSpeeds.ghostFrightened;
+    } else if (type == GhostType.blinky) {
+      switch (game.elroyLevel) {
+        case 2:
+          percent = GameSpeeds.elroy2;
+          break;
+        case 1:
+          percent = GameSpeeds.elroy1;
+          break;
+        default:
+          percent = GameSpeeds.ghost;
+      }
+    } else {
+      percent = GameSpeeds.ghost;
+    }
+
+    var tiles = GameSpeeds.tiles(percent);
+    if (game.isInTunnel(gridPos, moveDir, moveProgress)) {
+      tiles *= GameSpeeds.tunnelFactor;
+    }
+    return tiles;
+  }
 
   /// Velocidad del mori al regresar a la base, en píxeles por segundo.
   final double moriSpeed = 140.0;
@@ -860,11 +1886,13 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   /// Fue comido y regresa a la base.
   bool isDead = false;
 
-  /// Está saliendo de la casa de fantasmas.
+  /// Está esperando o saliendo de la casa de fantasmas.
   bool isLeavingSpawn = true;
 
-  /// Tiempo restante de susto, en segundos.
-  double scaredTimer = 0.0;
+  double _releaseTimer;
+  double _builderTimer = AbilityConfig.builderFirstDelay;
+  int _seenReversalTick = 0;
+  bool _pendingReverse = false;
 
   final Random random = Random();
 
@@ -872,15 +1900,32 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   Sprite? scaredSprite;
   Sprite? moriSprite;
 
-  Ghost(this.gridPos);
+  /// Orden de desempate clásico cuando dos casillas están a igual distancia:
+  /// arriba, izquierda, abajo, derecha.
+  static final List<Vector2> _tieBreakOrder = [
+    Vector2(0, -1),
+    Vector2(-1, 0),
+    Vector2(0, 1),
+    Vector2(1, 0),
+  ];
+
+  Sprite? _tryLoad(String name) {
+    try {
+      return Sprite(game.images.fromCache(name));
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    try { ghostSprite = Sprite(game.images.fromCache('ghost.png')); } catch (_) {}
-    try { scaredSprite = Sprite(game.images.fromCache('niga.png')); } catch (_) {}
-    try { moriSprite = Sprite(game.images.fromCache('mori.png')); } catch (_) {}
+    ghostSprite = _tryLoad(personality.spriteAsset) ?? _tryLoad('ghost.png');
+    scaredSprite = _tryLoad('niga.png');
+    moriSprite = _tryLoad('mori.png');
 
+    _seenReversalTick = game.modeController.reversalTick;
+    game.ghosts[type] = this;
     size = Vector2(16, 16);
     updatePixelPosition();
   }
@@ -893,10 +1938,48 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     );
   }
 
-  /// Dibuja el sprite según el estado actual. Si falta la imagen se usa una
-  /// figura de respaldo (gris para el mori, roja para el fantasma).
+  @override
+  void onRemove() {
+    if (game.ghosts[type] == this) {
+      game.ghosts.remove(type);
+    }
+    super.onRemove();
+  }
+
+  /// Dibuja el campo del imán (solo Blinky), el cuerpo y el número.
   @override
   void render(Canvas canvas) {
+    if (type == GhostType.blinky && game.magnetStrength > 0) {
+      _renderMagnetField(canvas);
+    }
+    _renderBody(canvas);
+    drawEntityLabel(canvas, '$number', size, personality.color);
+  }
+
+  /// Aura roja de radio [AbilityConfig.magnetRadiusTiles] que se intensifica
+  /// cuanto más cerca está Pac-Man.
+  void _renderMagnetField(Canvas canvas) {
+    final center = Offset(size.x / 2, size.y / 2);
+    final radius = AbilityConfig.magnetRadiusTiles * game.tileSize;
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = Colors.redAccent.withAlpha((25 + 60 * game.magnetStrength).round())
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = Colors.redAccent.withAlpha(130)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+  }
+
+  /// Dibuja el cuerpo del fantasma según su estado actual.
+  void _renderBody(Canvas canvas) {
     if (isDead) {
       if (moriSprite != null) {
         moriSprite!.render(canvas, size: size);
@@ -904,9 +1987,18 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
         canvas.drawRect(size.toRect(), Paint()..color = Colors.grey);
       }
       return;
-    } else if (isScared) {
-      if (scaredSprite != null) {
-        scaredSprite!.render(canvas, size: size);
+    }
+
+    if (isScared) {
+      // En los últimos 2 segundos parpadea mostrando su aspecto normal.
+      final left = game.modeController.frightenedTimeLeft;
+      final blinkNormal = left < 2.0 && (left * 4).floor().isEven;
+      if (!blinkNormal) {
+        if (scaredSprite != null) {
+          scaredSprite!.render(canvas, size: size);
+        } else {
+          canvas.drawRect(size.toRect(), Paint()..color = Colors.blue);
+        }
         return;
       }
     }
@@ -914,17 +2006,18 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     if (ghostSprite != null) {
       ghostSprite!.render(canvas, size: size);
     } else {
-      canvas.drawRect(size.toRect(), Paint()..color = Colors.red);
+      canvas.drawRect(size.toRect(), Paint()..color = personality.color);
     }
   }
 
-  /// Asusta al fantasma durante 8 segundos.
+  /// Marca al fantasma como asustado. La inversión de dirección la dispara
+  /// [GhostModeController.startFrightened].
   ///
-  /// No tiene efecto si ya fue comido o si todavía está saliendo de la base.
+  /// Afecta también a los fantasmas que aún están en la base. No tiene
+  /// efecto si ya fue comido.
   void triggerPanic() {
-    if (!isDead && !isLeavingSpawn) {
+    if (!isDead) {
       isScared = true;
-      scaredTimer = 8.0;
     }
   }
 
@@ -933,118 +2026,263 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     super.update(dt);
     if (game.isGameOver || game.isGameWon) return;
 
-    // --- Estado: MUERTO (mori) -------------------------------------------
-    // Vuela en línea recta hacia la base; al llegar revive como fantasma.
+    _syncReversal();
+    if (isScared && !game.modeController.isFrightened) {
+      isScared = false; // Terminó el modo Frightened.
+    }
+
     if (isDead) {
-      Vector2 targetSpawnPx = Vector2(
-        game.mazeOffsetX + spawnGridPos.x * game.tileSize + 4,
-        24 + spawnGridPos.y * game.tileSize + 4,
-      );
-
-      final toTarget = targetSpawnPx - position;
-      final dist = toTarget.length;
-
-      if (dist <= moriSpeed * dt + 1) {
-        isDead = false;
-        isScared = false;
-        isLeavingSpawn = true;
-        moveProgress = 0.0;
-        moveDir = Vector2(0, -1);
-        gridPos = spawnGridPos.clone();
-        updatePixelPosition();
-      } else {
-        position = position + toTarget / dist * (moriSpeed * dt);
-      }
+      _pendingReverse = false;
+      _updateDead(dt);
       return;
     }
 
-    // --- Estado: SALIENDO DE LA BASE -------------------------------------
     if (isLeavingSpawn) {
-      moveDir = Vector2(0, -1);
-      if (moveProgress == 0.0) {
-        int targetX = (gridPos.x + moveDir.x).toInt();
-        int targetY = (gridPos.y + moveDir.y).toInt();
-        if (!game.isWalkable(targetX, targetY, isGhost: true)) {
-          moveDir = Vector2(0, 1);
-        }
-      }
-      moveProgress += speed * dt;
-      double startX = game.mazeOffsetX + gridPos.x * game.tileSize + 4;
-      double startY = 24 + gridPos.y * game.tileSize + 4;
-      double endX = game.mazeOffsetX + (gridPos.x + moveDir.x) * game.tileSize + 4;
-      double endY = 24 + (gridPos.y + moveDir.y) * game.tileSize + 4;
-
-      position.x = startX + (endX - startX) * min(moveProgress, 1.0);
-      position.y = startY + (endY - startY) * min(moveProgress, 1.0);
-
-      if (moveProgress >= 1.0) {
-        gridPos.add(moveDir);
-        moveProgress = 0.0;
-        updatePixelPosition();
-        if (gridPos.y <= 6) {
-          isLeavingSpawn = false;
-        }
-      }
+      _pendingReverse = false;
+      _updateLeavingSpawn(dt);
       return;
     }
 
-    // --- Temporizador del estado asustado --------------------------------
-    if (isScared) {
-      scaredTimer -= dt;
-      if (scaredTimer <= 0) {
+    _updateRoaming(dt);
+    _updateBuilder(dt);
+    _checkPlayerCollision();
+  }
+
+  // ---------------------------------------------------------------------------
+  // ESTADOS
+  // ---------------------------------------------------------------------------
+
+  /// Mori: vuela en línea recta a la base y revive como fantasma.
+  void _updateDead(double dt) {
+    final targetPx = Vector2(
+      game.mazeOffsetX + spawnGridPos.x * game.tileSize + 4,
+      24 + spawnGridPos.y * game.tileSize + 4,
+    );
+    final toTarget = targetPx - position;
+    final dist = toTarget.length;
+
+    if (dist <= moriSpeed * dt + 1) {
+      isDead = false;
+      isScared = false;
+      isLeavingSpawn = true;
+      _releaseTimer = 0.0; // Sale de inmediato.
+      moveProgress = 0.0;
+      moveDir = Vector2(0, -1);
+      gridPos = spawnGridPos.clone();
+      updatePixelPosition();
+    } else {
+      position = position + toTarget / dist * (moriSpeed * dt);
+    }
+  }
+
+  /// Espera su turno de salida y sube hasta salir de la casa (fila 5).
+  void _updateLeavingSpawn(double dt) {
+    if (_releaseTimer > 0) {
+      _releaseTimer -= dt;
+      return;
+    }
+
+    if (moveProgress == 0.0) {
+      moveDir = Vector2(0, -1);
+      if (!game.isWalkable(gridPos.x.toInt(), gridPos.y.toInt() - 1,
+          isGhost: true)) {
+        moveDir = Vector2(0, 1);
+      }
+    }
+
+    final arrived = _advance(dt, speed);
+    if (arrived && gridPos.y <= 5) {
+      isLeavingSpawn = false;
+    }
+  }
+
+  /// Movimiento normal por el laberinto con la IA de intersecciones.
+  void _updateRoaming(double dt) {
+    // Inversión obligatoria por cambio de modo global o power-up: se aplica
+    // de inmediato, incluso a mitad de camino entre dos casillas.
+    var justReversed = false;
+    if (_pendingReverse) {
+      _pendingReverse = false;
+      justReversed = _reverseNow();
+    }
+
+    // Solo se decide al estar exactamente sobre una casilla.
+    if (moveProgress == 0.0 && !justReversed) {
+      moveDir = _decideDirection();
+    }
+    _advance(dt, _currentSpeed());
+  }
+
+  /// Da la vuelta en U de inmediato. Devuelve `true` si se aplicó.
+  ///
+  /// A mitad de camino se intercambian origen y destino, por lo que no hay
+  /// saltos visuales. Si está justo sobre una casilla, simplemente invierte
+  /// la dirección (si el camino de regreso está libre).
+  bool _reverseNow() {
+    if (moveProgress > 0.0) {
+      gridPos.add(moveDir);
+      moveDir = -moveDir;
+      moveProgress = 1.0 - moveProgress;
+      return true;
+    }
+    final back = -moveDir;
+    if (_canEnterTile(
+        gridPos.x.toInt() + back.x.toInt(), gridPos.y.toInt() + back.y.toInt())) {
+      moveDir = back;
+      return true;
+    }
+    return false;
+  }
+
+  /// Habilidad del Fantasma Constructor (solo Pinky): cada cierto tiempo, y
+  /// solo en modo Chase, pide colocar una pared temporal detrás de Pac-Man.
+  void _updateBuilder(double dt) {
+    if (type != GhostType.pinky) return;
+    if (isScared || game.modeController.mode != GhostMode.chase) return;
+
+    _builderTimer -= dt;
+    if (_builderTimer > 0) return;
+
+    // Si no hay una casilla válida, reintenta en un segundo.
+    _builderTimer = game.tryPlaceBuilderWall()
+        ? AbilityConfig.builderCooldown
+        : 1.0;
+  }
+
+  /// Colisión con Pac-Man: asustado = muere (200/400/800/1600 pts); normal =
+  /// fin de partida.
+  void _checkPlayerCollision() {
+    if (!game.player.isMounted) return;
+    if (toRect().overlaps(game.player.toRect())) {
+      if (isScared) {
+        isDead = true;
         isScared = false;
-      }
-    }
-
-    // --- Decisión de dirección (solo al estar exactamente en una casilla) -
-    if (moveProgress == 0.0 && game.player.isMounted) {
-      final player = game.player;
-      bool hasVision = game.hasLineOfSight(gridPos, player.gridPos);
-
-      if (hasVision) {
-        // Dirección hacia el jugador, limitada a -1, 0 o 1 en cada eje.
-        Vector2 targetDir = Vector2(
-          player.gridPos.x > gridPos.x ? 1.0 : (player.gridPos.x < gridPos.x ? -1.0 : 0.0),
-          player.gridPos.y > gridPos.y ? 1.0 : (player.gridPos.y < gridPos.y ? -1.0 : 0.0),
-        );
-
-        if (isScared) {
-          // Asustado: huye en sentido contrario al jugador.
-          Vector2 fleeDir = -targetDir;
-          int fleeX = (gridPos.x + fleeDir.x).toInt();
-          int fleeY = (gridPos.y + fleeDir.y).toInt();
-          if (fleeDir != Vector2.zero() &&
-              game.isWalkable(fleeX, fleeY, isGhost: true)) {
-            moveDir = fleeDir;
-          } else {
-            _pickRandomValidDir();
-          }
-        } else {
-          // Normal: persigue al jugador.
-          int nextX = (gridPos.x + targetDir.x).toInt();
-          int nextY = (gridPos.y + targetDir.y).toInt();
-          if (targetDir != Vector2.zero() &&
-              game.isWalkable(nextX, nextY, isGhost: true)) {
-            moveDir = targetDir;
-          } else {
-            _pickRandomValidDir();
-          }
-        }
+        moveProgress = 0.0;
+        game.addScore(game.nextGhostEatScore());
       } else {
-        // Sin visión del jugador: deambula al azar.
-        _pickRandomValidDir();
+        game.triggerGameOver(cause: 'Te atrapó el fantasma $number');
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // IA: TOMA DE DECISIONES EN INTERSECCIONES
+  // ---------------------------------------------------------------------------
+
+  /// Detecta si el controlador global pidió una inversión de dirección.
+  void _syncReversal() {
+    final tick = game.modeController.reversalTick;
+    if (tick != _seenReversalTick) {
+      _seenReversalTick = tick;
+      _pendingReverse = true;
+    }
+  }
+
+  /// Decide la próxima dirección desde la casilla actual.
+  ///
+  /// 1. (La inversión por cambio de modo se aplica antes, en [_updateRoaming].)
+  /// 2. Reúne las casillas vecinas transitables, excluyendo retroceder.
+  /// 3. Asustado: elige una al azar.
+  /// 4. En otro caso: elige la que minimiza la distancia (al cuadrado) a la
+  ///    casilla objetivo; los empates se resuelven por [_tieBreakOrder].
+  /// 5. Si no hay salida (callejón), da la vuelta.
+  Vector2 _decideDirection() {
+    final col = gridPos.x.toInt();
+    final row = gridPos.y.toInt();
+
+    // 2) Opciones válidas (sin retroceder).
+    final options = <Vector2>[];
+    for (final dir in _tieBreakOrder) {
+      if (dir.x == -moveDir.x && dir.y == -moveDir.y) continue;
+      if (_canEnterTile(col + dir.x.toInt(), row + dir.y.toInt())) {
+        options.add(dir);
       }
     }
 
-    // --- Movimiento interpolado entre casillas ---------------------------
-    moveProgress += speed * dt;
-    double startX = game.mazeOffsetX + gridPos.x * game.tileSize + 4;
-    double startY = 24 + gridPos.y * game.tileSize + 4;
-    double endX = game.mazeOffsetX + (gridPos.x + moveDir.x) * game.tileSize + 4;
-    double endY = 24 + (gridPos.y + moveDir.y) * game.tileSize + 4;
+    // 5) Callejón sin salida.
+    if (options.isEmpty) return -moveDir;
+    if (options.length == 1) return options.first.clone();
 
-    position.x = startX + (endX - startX) * min(moveProgress, 1.0);
-    position.y = startY + (endY - startY) * min(moveProgress, 1.0);
+    // 3) Asustado: aleatorio.
+    if (isScared) {
+      return options[random.nextInt(options.length)].clone();
+    }
+
+    // 4) Minimizar distancia al objetivo.
+    final target = _currentTarget();
+    Vector2 best = options.first;
+    double bestDist = double.infinity;
+    for (final dir in options) {
+      final dx = (col + dir.x) - target.x;
+      final dy = (row + dir.y) - target.y;
+      final d = dx * dx + dy * dy;
+      if (d < bestDist) {
+        bestDist = d;
+        best = dir;
+      }
+    }
+    return best.clone();
+  }
+
+  /// Casilla objetivo según el modo global y la personalidad.
+  Vector2 _currentTarget() {
+    if (!game.player.isMounted) return personality.scatterTarget;
+
+    // Cruise Elroy: Blinky ignora el modo Scatter y sigue persiguiendo.
+    final elroyHunting = kElroyIgnoresScatter &&
+        type == GhostType.blinky &&
+        game.elroyLevel > 0;
+
+    if (game.modeController.baseMode == GhostMode.scatter && !elroyHunting) {
+      return personality.scatterTarget;
+    }
+    return personality.chaseTarget(_buildContext());
+  }
+
+  /// Reúne los datos que necesitan las personalidades.
+  GhostContext _buildContext() {
+    Vector2 blinkyTile = gridPos;
+    for (final g in game.children.whereType<Ghost>()) {
+      if (g.type == GhostType.blinky) {
+        blinkyTile = g.gridPos;
+        break;
+      }
+    }
+    return GhostContext(
+      ghostTile: gridPos,
+      pacTile: game.player.gridPos,
+      pacDir: game.player.facing,
+      blinkyTile: blinkyTile,
+    );
+  }
+
+  /// Indica si un fantasma vivo puede entrar a la casilla ([col], [row]).
+  ///
+  /// Igual que [PacManGame.isWalkable], pero además le prohíbe volver a
+  /// entrar a la casa de fantasmas (celdas con valor 2).
+  bool _canEnterTile(int col, int row) {
+    if (!game.isWalkable(col, row, isGhost: true)) return false;
+    if (col < 0 || col >= game.maxCols) return true; // Túnel lateral.
+    return game.mazeGrid[row][col] != 2;
+  }
+
+  // ---------------------------------------------------------------------------
+  // MOVIMIENTO
+  // ---------------------------------------------------------------------------
+
+  /// Avanza interpolando hacia la siguiente casilla.
+  /// Devuelve `true` si en este frame llegó a ella.
+  bool _advance(double dt, double tilesPerSecond) {
+    moveProgress += tilesPerSecond * dt;
+
+    final startX = game.mazeOffsetX + gridPos.x * game.tileSize + 4;
+    final startY = 24 + gridPos.y * game.tileSize + 4;
+    final endX = game.mazeOffsetX + (gridPos.x + moveDir.x) * game.tileSize + 4;
+    final endY = 24 + (gridPos.y + moveDir.y) * game.tileSize + 4;
+    final t = min(moveProgress, 1.0);
+
+    position.x = startX + (endX - startX) * t;
+    position.y = startY + (endY - startY) * t;
 
     if (moveProgress >= 1.0) {
       gridPos.add(moveDir);
@@ -1057,48 +2295,9 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
         gridPos.x = 0;
       }
       updatePixelPosition();
+      return true;
     }
-
-    // --- Colisión con el jugador -----------------------------------------
-    // Asustado: el fantasma muere (+500 pts). Normal: fin de la partida.
-    if (!isDead && toRect().overlaps(game.player.toRect())) {
-      if (isScared) {
-        isDead = true;
-        isScared = false;
-        moveProgress = 0.0;
-        game.addScore(500);
-      } else {
-        game.triggerGameOver();
-      }
-    }
-  }
-
-  /// Elige al azar una dirección válida, evitando dar media vuelta.
-  ///
-  /// Si no hay ninguna opción (callejón sin salida), invierte el sentido.
-  void _pickRandomValidDir() {
-    List<Vector2> validDirs = [];
-    for (var dir in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]) {
-      if (dir != -moveDir &&
-          game.isWalkable(
-            (gridPos.x + dir.x).toInt(),
-            (gridPos.y + dir.y).toInt(),
-            isGhost: true,
-          )) {
-        validDirs.add(dir.clone());
-      }
-    }
-    if (validDirs.isNotEmpty) {
-      moveDir = validDirs[random.nextInt(validDirs.length)];
-    } else {
-      if (game.isWalkable(
-        (gridPos.x - moveDir.x).toInt(),
-        (gridPos.y - moveDir.y).toInt(),
-        isGhost: true,
-      )) {
-        moveDir = -moveDir;
-      }
-    }
+    return false;
   }
 }
 

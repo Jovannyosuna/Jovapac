@@ -12,16 +12,23 @@
 //   comido se convierte en "mori" y regresa a su base, donde vuelve a ser un
 //   fantasma normal.
 //
+//   Al comer todos los puntos se muestra la pantalla de victoria (win.png).
+//   Una barra de progreso bajo el laberinto indica cuánto falta para ganar.
+//
 // CONTROLES
-//   - Teclado: flechas direccionales.
-//   - Táctil:  deslizar el dedo en la dirección deseada.
+//   - Teclado: flechas direccionales.  ESC = pausa / continuar.
+//   - Táctil:  deslizar el dedo; tocar la esquina superior izquierda pausa.
+//
+// PANTALLAS
+//   Menú, Game Over, Victoria y Pausa se estiran al ancho del laberinto
+//   (ver MazeFrame) y usan una paleta neón a juego con tus imágenes.
 //
 // ESTRUCTURA DEL ARCHIVO
 //   1. Punto de entrada y configuración de la app
 //   2. Pantallas de Flutter (menú principal y contenedor del juego)
 //   3. Núcleo del juego (PacManGame)
-//   4. Menús superpuestos (Game Over y Victoria)
-//   5. Entidades: PlayerPacman, Dot, Ghost y Wall
+//   4. Menús superpuestos (Game Over, Victoria y Pausa)
+//   5. Entidades: PlayerPacman, Dot, Ghost, Wall y ProgressBar
 //   6. IA de fantasmas: modos globales, personalidades y toma de decisiones
 //   7. Velocidades: tabla relativa, túneles, modo asustado y Cruise Elroy
 //   8. Habilidades especiales: Imán (Blinky), Constructor (Pinky) y
@@ -29,7 +36,7 @@
 //
 // RECURSOS REQUERIDOS (carpeta assets/images/, declarada en pubspec.yaml)
 //   pacman.png, ghost.png, dot.png, niga.png, mori.png,
-//   game_over.png, jova_logo.png
+//   game_over.png, win.png, jova_logo.png
 //   Si alguna imagen no está disponible, el juego usa figuras de respaldo
 //   (círculos y cuadros de color) y continúa funcionando.
 // =============================================================================
@@ -85,67 +92,364 @@ class MyApp extends StatelessWidget {
 // 2. PANTALLAS DE FLUTTER
 // =============================================================================
 
+// -----------------------------------------------------------------------------
+// COMPONENTES VISUALES COMPARTIDOS
+// -----------------------------------------------------------------------------
+
+/// Tamaño del laberinto en el lienzo virtual (27 x 16 casillas de 24 px).
+const double _mazeVirtualW = 27 * 24.0;
+const double _mazeVirtualH = 16 * 24.0;
+
+/// Colores de la identidad visual (los del texto de tus imágenes).
+const Color _neonLime = Color(0xFFC8FF00);
+const Color _neonOrange = Color(0xFFFF6A00);
+
+/// Reserva exactamente el área que ocupa el laberinto en pantalla.
+///
+/// Usa la misma escala que [PacManGame], así las pantallas se estiran
+/// "de lado a lado" del mapa en cualquier teléfono o ventana. [builder]
+/// recibe la escala para dimensionar textos y botones proporcionalmente.
+class MazeFrame extends StatelessWidget {
+  const MazeFrame({super.key, required this.builder});
+
+  final Widget Function(BuildContext context, double scale) builder;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final scale = min(c.maxWidth / PacManGame.virtualWidth,
+          c.maxHeight / PacManGame.virtualHeight);
+      return Center(
+        child: SizedBox(
+          width: _mazeVirtualW * scale,
+          height: _mazeVirtualH * scale,
+          child: builder(context, scale),
+        ),
+      );
+    });
+  }
+}
+
+/// Botón con estilo neón. [filled] = relleno de color; si no, solo contorno.
+class _NeonButton extends StatelessWidget {
+  const _NeonButton({
+    required this.label,
+    required this.onPressed,
+    required this.s,
+    this.color = _neonLime,
+    this.filled = true,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final double s;
+  final Color color;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(30));
+    final pad = EdgeInsets.symmetric(horizontal: 22 * s, vertical: 8 * s);
+    final text = Text(
+      label,
+      style: TextStyle(
+        fontSize: 9.5 * s,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 1.2,
+      ),
+    );
+
+    if (filled) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [
+            BoxShadow(color: color.withAlpha(140), blurRadius: 18, spreadRadius: 1),
+          ],
+        ),
+        child: ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: color,
+            foregroundColor: Colors.black,
+            padding: pad,
+            shape: shape,
+            elevation: 0,
+          ),
+          onPressed: onPressed,
+          child: text,
+        ),
+      );
+    }
+    return OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: color, width: 2),
+        padding: pad,
+        shape: shape,
+      ),
+      onPressed: onPressed,
+      child: text,
+    );
+  }
+}
+
 /// Pantalla de inicio (menú principal).
 ///
-/// Muestra el logotipo del juego y el botón "Iniciar juego". Si la imagen
-/// `jova_logo.png` no se encuentra, se muestra el título como texto.
-class MainMenuScreen extends StatelessWidget {
+/// - El logotipo `jova_logo.png` se estira al ancho del laberinto y flota
+///   suavemente.
+/// - El botón "Iniciar juego" pulsa para llamar la atención.
+/// - Debajo, una tira animada con los sprites de tu juego: el jugador se come
+///   los puntos perseguido por los 4 fantasmas.
+/// Si el logotipo no se encuentra, se muestra el título como texto.
+class MainMenuScreen extends StatefulWidget {
   const MainMenuScreen({super.key});
+
+  @override
+  State<MainMenuScreen> createState() => _MainMenuScreenState();
+}
+
+class _MainMenuScreenState extends State<MainMenuScreen>
+    with SingleTickerProviderStateMixin {
+  /// Reloj de 8 s que mueve todas las animaciones del menú.
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: const Duration(seconds: 8))
+        ..repeat();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Image.asset(
-              'assets/images/jova_logo.png',
-              width: 420,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) {
-                return const Text(
-                  'JOVA-LAND',
-                  style: TextStyle(
-                    fontSize: 40,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.yellow,
+      body: Stack(
+        children: [
+          // Fondo con resplandor azul.
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(0, -0.3),
+                  radius: 1.1,
+                  colors: [Color(0xFF14146B), Colors.black],
+                ),
+              ),
+            ),
+          ),
+          // Tira animada con los personajes de tu juego.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 6,
+            height: 46,
+            child: _SpriteChase(animation: _ctrl),
+          ),
+          SafeArea(
+            child: LayoutBuilder(builder: (context, c) {
+              final s = min(c.maxWidth / PacManGame.virtualWidth,
+                  c.maxHeight / PacManGame.virtualHeight);
+              return Center(
+                child: SizedBox(
+                  width: _mazeVirtualW * s,
+                  child: Column(
+                    children: [
+                      SizedBox(height: 8 * s),
+                      // Logotipo flotando.
+                      Expanded(
+                        child: AnimatedBuilder(
+                          animation: _ctrl,
+                          builder: (context, child) => Transform.translate(
+                            offset: Offset(0, 5 * s * sin(_ctrl.value * 2 * pi * 4)),
+                            child: child,
+                          ),
+                          child: Image.asset(
+                            'assets/images/jova_logo.png',
+                            width: double.infinity,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Center(
+                                child: Text(
+                                  'JOVA-LAND',
+                                  style: TextStyle(
+                                    fontSize: 40 * s,
+                                    fontWeight: FontWeight.w900,
+                                    color: _neonLime,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 8 * s),
+                      // Botón pulsante.
+                      AnimatedBuilder(
+                        animation: _ctrl,
+                        builder: (context, child) => Transform.scale(
+                          scale: 1 + 0.04 * sin(_ctrl.value * 2 * pi * 8),
+                          child: child,
+                        ),
+                        child: _NeonButton(
+                          label: 'INICIAR JUEGO',
+                          s: s * 1.15,
+                          onPressed: () {
+                            Navigator.pushReplacement(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (context) => const GameScreen()),
+                            );
+                          },
+                        ),
+                      ),
+                      SizedBox(height: 8 * s),
+                      Text(
+                        'FLECHAS O DESLIZA PARA MOVERTE   ·   ESC O ESQUINA SUPERIOR IZQUIERDA = PAUSA',
+                        style: TextStyle(
+                          fontSize: 6.5 * s,
+                          letterSpacing: 1.4,
+                          color: Colors.white60,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 3 * s),
+                      Text(
+                        'Hecho por Gabriel Jovanny Osuna Martínez',
+                        style: TextStyle(fontSize: 6 * s, color: Colors.white30),
+                      ),
+                      // Espacio para la tira de Pac-Man del fondo.
+                      const SizedBox(height: 52),
+                    ],
                   ),
-                );
-              },
-            ),
-            const SizedBox(height: 35),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue.shade800,
-                foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 45, vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: Colors.yellow, width: 2),
                 ),
-                elevation: 6,
-              ),
-              onPressed: () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (context) => const GameScreen()),
-                );
-              },
-              child: const Text(
-                'Iniciar juego',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-          ],
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tira animada del menú hecha con los sprites de TU juego.
+///
+/// El jugador (`pacman.png`) recorre la pantalla comiéndose los puntos
+/// (`dot.png`) mientras los 4 fantasmas lo persiguen. Cada fantasma usa su
+/// sprite propio (`ghost_pinky.png`, ...) y, si no existe, `ghost.png`, igual
+/// que dentro del juego. Si falta cualquier imagen se dibuja una figura de
+/// respaldo. [animation] va de 0.0 a 1.0 y se repite.
+class _SpriteChase extends StatelessWidget {
+  const _SpriteChase({required this.animation});
+
+  final Animation<double> animation;
+
+  static const double _size = 34;
+  static const double _dotSpacing = 34;
+  static const double _ghostGap = 46;
+
+  /// Del más cercano a Pac-Man al más lejano: Blinky, Pinky, Inky y Clyde.
+  static const List<String> _ghostAssets = [
+    'assets/images/ghost.png',
+    'assets/images/ghost_pinky.png',
+    'assets/images/ghost_inky.png',
+    'assets/images/ghost_clyde.png',
+  ];
+  static const List<Color> _ghostColors = [
+    Colors.red,
+    Colors.pinkAccent,
+    Colors.cyanAccent,
+    Colors.orange,
+  ];
+
+  Widget _player() {
+    return SizedBox(
+      width: _size,
+      height: _size,
+      child: Image.asset(
+        'assets/images/pacman.png',
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => const DecoratedBox(
+          decoration: BoxDecoration(color: Colors.yellow, shape: BoxShape.circle),
         ),
       ),
+    );
+  }
+
+  Widget _ghost(int i) {
+    return SizedBox(
+      width: _size,
+      height: _size,
+      child: Image.asset(
+        _ghostAssets[i],
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => Image.asset(
+          'assets/images/ghost.png',
+          fit: BoxFit.contain,
+          errorBuilder: (context, error, stackTrace) => DecoratedBox(
+            decoration: BoxDecoration(
+              color: _ghostColors[i],
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dot() {
+    return SizedBox(
+      width: 8,
+      height: 8,
+      child: Image.asset(
+        'assets/images/dot.png',
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => const DecoratedBox(
+          decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: LayoutBuilder(builder: (context, c) {
+        final w = c.maxWidth;
+        final h = c.maxHeight;
+        return AnimatedBuilder(
+          animation: animation,
+          builder: (context, _) {
+            final t = animation.value;
+            final pacX = -230 + t * (w + 460);
+            final top = h / 2 - _size / 2;
+            // Saltito suave para que los personajes se sientan vivos.
+            double bob(double phase) => 3 * sin(t * 2 * pi * 30 + phase);
+
+            final items = <Widget>[];
+
+            // Puntos: desaparecen al pasar el jugador.
+            for (double x = _dotSpacing / 2; x < w; x += _dotSpacing) {
+              if (x > pacX + _size / 2) {
+                items.add(Positioned(left: x - 4, top: h / 2 - 4, child: _dot()));
+              }
+            }
+            // Fantasmas detrás (el más lejano primero).
+            for (int i = _ghostAssets.length - 1; i >= 0; i--) {
+              items.add(Positioned(
+                left: pacX - (i + 1) * _ghostGap,
+                top: top + bob(i * 1.3),
+                child: _ghost(i),
+              ));
+            }
+            // Jugador al frente.
+            items.add(Positioned(left: pacX, top: top + bob(0), child: _player()));
+
+            return Stack(children: items);
+          },
+        );
+      }),
     );
   }
 }
@@ -166,16 +470,29 @@ class _GameScreenState extends State<GameScreen> {
   /// Instancia única del juego, creada una sola vez para toda la pantalla.
   final PacManGame gameInstance = PacManGame();
 
+  /// Foco del teclado del juego (se devuelve al juego al salir de la pausa).
+  final FocusNode _gameFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _gameFocus.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
+      body: Stack(
+        children: [
+      GestureDetector(
         // Se usa la componente dominante del desplazamiento para decidir si
         // el gesto es horizontal o vertical. El umbral de 1.5 px evita que
         // movimientos mínimos del dedo se interpreten como un giro.
         onPanUpdate: (details) {
-          if (!gameInstance.isGameOver && !gameInstance.isGameWon) {
+          if (!gameInstance.isGameOver &&
+              !gameInstance.isGameWon &&
+              !gameInstance.isPaused) {
             if (details.delta.dx.abs() > details.delta.dy.abs()) {
               if (details.delta.dx > 1.5) {
                 gameInstance.player.changeDirection(Vector2(1, 0)); // Derecha
@@ -194,12 +511,32 @@ class _GameScreenState extends State<GameScreen> {
         child: SizedBox.expand(
           child: GameWidget<PacManGame>.controlled(
             gameFactory: () => gameInstance,
+            focusNode: _gameFocus,
             overlayBuilderMap: {
               'GameOverMenu': (context, game) => GameOverOverlay(game),
               'GameWinMenu': (context, game) => GameWinOverlay(game),
+              'PauseMenu': (context, game) => PauseOverlay(game, _gameFocus),
             },
           ),
         ),
+      ),
+      // Zona táctil INVISIBLE de pausa: esquina superior izquierda.
+      // Un toque pausa la partida y otro la reanuda.
+      Positioned(
+        top: 0,
+        left: 0,
+        width: 96,
+        height: 72,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            gameInstance.togglePause();
+            _gameFocus.requestFocus();
+          },
+          child: const SizedBox.expand(),
+        ),
+      ),
+        ],
       ),
     );
   }
@@ -518,8 +855,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Ancho del lienzo virtual.
   static const double virtualWidth = 900.0;
 
-  /// Alto del lienzo virtual: 24 (marcadores) + 16 * 24 (laberinto) + margen.
-  static const double virtualHeight = 410.0;
+  /// Alto del lienzo virtual: 24 (marcadores) + 16 * 24 (laberinto) +
+  /// espacio para la barra de progreso.
+  static const double virtualHeight = 432.0;
 
   double _scale = 1.0;
   Vector2 _offset = Vector2.zero();
@@ -561,6 +899,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
       'niga.png',
       'mori.png',
       'game_over.png',
+      'win.png',
       'jova_logo.png'
     ]) {
       try {
@@ -639,6 +978,8 @@ class PacManGame extends FlameGame with KeyboardEvents {
     scoreText.text = 'SCORE: $score';
     overlays.remove('GameOverMenu');
     overlays.remove('GameWinMenu');
+    overlays.remove('PauseMenu');
+    resumeEngine(); // Un reinicio siempre quita la pausa.
 
     children
         .where((c) =>
@@ -647,7 +988,8 @@ class PacManGame extends FlameGame with KeyboardEvents {
             c is Dot ||
             c is Wall ||
             c is TempWall ||
-            c is LaserLink)
+            c is LaserLink ||
+            c is ProgressBar)
         .toList()
         .forEach((c) => c.removeFromParent());
 
@@ -666,6 +1008,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
     // Láser que une a Inky (3) y Clyde (4).
     add(LaserLink());
+
+    // Barra de progreso del nivel.
+    add(ProgressBar());
   }
 
   /// Suma [points] a la puntuación, actualiza el récord y verifica la victoria.
@@ -749,6 +1094,24 @@ class PacManGame extends FlameGame with KeyboardEvents {
     return false;
   }
 
+  /// Indica si el juego está en pausa.
+  bool get isPaused => paused;
+
+  /// Pausa o reanuda la partida (tecla ESC o botón "Continuar").
+  ///
+  /// `pauseEngine()` congela todo, incluidos los temporizadores de modos,
+  /// el láser y las paredes del Constructor.
+  void togglePause() {
+    if (isGameOver || isGameWon) return;
+    if (paused) {
+      resumeEngine();
+      overlays.remove('PauseMenu');
+    } else {
+      pauseEngine();
+      overlays.add('PauseMenu');
+    }
+  }
+
   /// Termina la partida por derrota y muestra el menú de Game Over.
   void triggerGameOver({String? cause}) {
     if (isGameOver || isGameWon) return;
@@ -764,11 +1127,18 @@ class PacManGame extends FlameGame with KeyboardEvents {
     overlays.add('GameWinMenu');
   }
 
-  /// Gestiona la entrada por teclado (flechas direccionales).
+  /// Gestiona la entrada por teclado (flechas direccionales y ESC).
   @override
   KeyEventResult onKeyEvent(
       KeyEvent event, Set<LogicalKeyboardKey> keysPressed) {
     if (isGameOver || isGameWon) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape) {
+      togglePause();
+      return KeyEventResult.handled;
+    }
+    if (paused) return KeyEventResult.handled;
 
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (keysPressed.contains(LogicalKeyboardKey.arrowLeft)) {
@@ -789,124 +1159,376 @@ class PacManGame extends FlameGame with KeyboardEvents {
 // 4. MENÚS SUPERPUESTOS (OVERLAYS)
 // =============================================================================
 
+/// Ficha de estadística (etiqueta pequeña + valor grande).
+class _StatChip extends StatelessWidget {
+  const _StatChip(this.label, this.value, this.color, this.s);
+
+  final String label;
+  final String value;
+  final Color color;
+  final double s;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16 * s, vertical: 4 * s),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(10 * s),
+        border: Border.all(color: color.withAlpha(170), width: 1.5),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 6.5 * s,
+              letterSpacing: 1.4,
+              color: Colors.white70,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13 * s,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tarjeta de resultado (Game Over / Victoria).
+///
+/// Ocupa exactamente el área del laberinto. La imagen se agranda al máximo
+/// dentro de la tarjeta (de lado a lado) y debajo van las estadísticas y los
+/// botones. Aparece con una animación de rebote.
+class ResultCard extends StatelessWidget {
+  const ResultCard({
+    super.key,
+    required this.asset,
+    required this.fallback,
+    required this.accent,
+    required this.stats,
+    required this.actions,
+    this.badge,
+    this.subtitle,
+    this.subtitleColor = Colors.white70,
+  });
+
+  /// Ruta de la imagen principal.
+  final String asset;
+
+  /// Texto que se muestra si la imagen no existe.
+  final String fallback;
+
+  /// Color del borde y del resplandor.
+  final Color accent;
+
+  /// Fichas de estadísticas (puntuación, récord...).
+  final List<_StatChip Function(double s)> stats;
+
+  /// Botones inferiores.
+  final List<Widget Function(double s)> actions;
+
+  /// Etiqueta destacada (por ejemplo "¡NUEVO RÉCORD!").
+  final String? badge;
+
+  /// Línea de texto bajo las estadísticas.
+  final String? subtitle;
+  final Color subtitleColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withAlpha(175),
+      child: MazeFrame(
+        builder: (context, s) {
+          return TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 550),
+            curve: Curves.easeOutBack,
+            builder: (context, v, child) => Opacity(
+              opacity: v.clamp(0.0, 1.0),
+              child: Transform.scale(scale: 0.8 + 0.2 * v, child: child),
+            ),
+            child: Container(
+              padding: EdgeInsets.fromLTRB(12 * s, 8 * s, 12 * s, 10 * s),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18 * s),
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xFF0E0E3A), Color(0xFF050514)],
+                ),
+                border: Border.all(color: accent, width: 3 * s),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withAlpha(120),
+                    blurRadius: 30 * s,
+                    spreadRadius: 2 * s,
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  // Imagen estirada al máximo disponible.
+                  Expanded(
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Image.asset(
+                        asset,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Center(
+                            child: Text(
+                              fallback,
+                              style: TextStyle(
+                                fontSize: 30 * s,
+                                fontWeight: FontWeight.w900,
+                                color: accent,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 6 * s),
+                  if (badge != null) ...[
+                    Text(
+                      badge!,
+                      style: TextStyle(
+                        fontSize: 9 * s,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 2,
+                        color: _neonLime,
+                      ),
+                    ),
+                    SizedBox(height: 4 * s),
+                  ],
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (int i = 0; i < stats.length; i++) ...[
+                        if (i > 0) SizedBox(width: 10 * s),
+                        stats[i](s),
+                      ],
+                    ],
+                  ),
+                  if (subtitle != null) ...[
+                    SizedBox(height: 5 * s),
+                    Text(
+                      subtitle!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 8 * s, color: subtitleColor),
+                    ),
+                  ],
+                  SizedBox(height: 8 * s),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (int i = 0; i < actions.length; i++) ...[
+                        if (i > 0) SizedBox(width: 12 * s),
+                        actions[i](s),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Vuelve al menú principal.
+void _goToMainMenu(BuildContext context) {
+  Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(builder: (context) => const MainMenuScreen()),
+  );
+}
+
 /// Menú que aparece al perder la partida.
 ///
-/// Muestra la imagen de Game Over (o un texto de respaldo), la puntuación
-/// final y un botón para reiniciar.
+/// Muestra `game_over.png` estirada al ancho del laberinto, la puntuación, el
+/// récord, el motivo de la derrota y los botones Reiniciar / Menú.
 class GameOverOverlay extends StatelessWidget {
   final PacManGame game;
   const GameOverOverlay(this.game, {super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black54,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Image.asset(
-              'assets/images/game_over.png',
-              height: 200,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) {
-                return const Text(
-                  'GAME OVER',
-                  style: TextStyle(
-                    fontSize: 35,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.redAccent,
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 15),
-            Text(
-              'Puntuación: ${game.score}',
-              style: const TextStyle(fontSize: 18, color: Colors.white),
-            ),
-            if (game.deathCause != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                game.deathCause!,
-                style: const TextStyle(fontSize: 14, color: Colors.redAccent),
-              ),
-            ],
-            const SizedBox(height: 12),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue.shade800,
-                foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  side: const BorderSide(color: Colors.yellow, width: 2),
-                ),
-              ),
-              onPressed: () => game.startGame(),
-              child: const Text(
-                'Reiniciar',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-      ),
+    final isRecord = game.score > 0 && game.score >= game.highScore;
+    return ResultCard(
+      asset: 'assets/images/game_over.png',
+      fallback: 'GAME OVER',
+      accent: _neonOrange,
+      badge: isRecord ? '¡NUEVO RÉCORD!' : null,
+      stats: [
+        (s) => _StatChip('PUNTUACIÓN', '${game.score}', Colors.white, s),
+        (s) => _StatChip('RÉCORD', '${game.highScore}', _neonLime, s),
+      ],
+      subtitle: game.deathCause,
+      subtitleColor: Colors.redAccent,
+      actions: [
+        (s) => _NeonButton(
+            label: 'REINICIAR', s: s, onPressed: () => game.startGame()),
+        (s) => _NeonButton(
+            label: 'MENÚ',
+            s: s,
+            filled: false,
+            color: Colors.white,
+            onPressed: () => _goToMainMenu(context)),
+      ],
     );
   }
 }
 
 /// Menú que aparece al ganar la partida (todos los puntos comidos).
+///
+/// Muestra `win.png` estirada al ancho del laberinto, la puntuación, el
+/// récord y los botones Jugar de nuevo / Menú.
 class GameWinOverlay extends StatelessWidget {
   final PacManGame game;
   const GameWinOverlay(this.game, {super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black87,
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.blue.shade900,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.yellow, width: 4),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                '¡VICTORIA!',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.yellow,
+    final isRecord = game.score > 0 && game.score >= game.highScore;
+    return ResultCard(
+      asset: 'assets/images/win.png',
+      fallback: '¡GANASTE!',
+      accent: _neonLime,
+      badge: isRecord ? '¡NUEVO RÉCORD!' : null,
+      stats: [
+        (s) => _StatChip('PUNTUACIÓN', '${game.score}', Colors.white, s),
+        (s) => _StatChip('RÉCORD', '${game.highScore}', _neonLime, s),
+      ],
+      subtitle: '¡Comiste todos los puntos!',
+      actions: [
+        (s) => _NeonButton(
+            label: 'JUGAR DE NUEVO', s: s, onPressed: () => game.startGame()),
+        (s) => _NeonButton(
+            label: 'MENÚ',
+            s: s,
+            filled: false,
+            color: Colors.white,
+            onPressed: () => _goToMainMenu(context)),
+      ],
+    );
+  }
+}
+
+/// Menú de pausa. ESC o el botón "Continuar" reanudan la partida.
+class PauseOverlay extends StatefulWidget {
+  final PacManGame game;
+  final FocusNode gameFocus;
+  const PauseOverlay(this.game, this.gameFocus, {super.key});
+
+  @override
+  State<PauseOverlay> createState() => _PauseOverlayState();
+}
+
+class _PauseOverlayState extends State<PauseOverlay> {
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _resume() {
+    widget.game.togglePause();
+    widget.gameFocus.requestFocus(); // Devuelve el teclado al juego.
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return KeyboardListener(
+      focusNode: _focus,
+      autofocus: true,
+      onKeyEvent: (event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.escape) {
+          _resume();
+        }
+      },
+      child: Material(
+        color: Colors.black.withAlpha(175),
+        child: MazeFrame(
+          builder: (context, s) {
+            return Center(
+              child: Container(
+                width: 260 * s,
+                padding: EdgeInsets.symmetric(horizontal: 20 * s, vertical: 16 * s),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18 * s),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xFF0E0E3A), Color(0xFF050514)],
+                  ),
+                  border: Border.all(color: _neonLime, width: 3 * s),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _neonLime.withAlpha(100),
+                      blurRadius: 28 * s,
+                      spreadRadius: 2 * s,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'PAUSA',
+                      style: TextStyle(
+                        fontSize: 30 * s,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 4,
+                        color: _neonLime,
+                      ),
+                    ),
+                    SizedBox(height: 3 * s),
+                    Text(
+                      'ESC o toca la esquina superior izquierda',
+                      style: TextStyle(fontSize: 8 * s, color: Colors.white60),
+                    ),
+                    SizedBox(height: 14 * s),
+                    _NeonButton(label: 'CONTINUAR', s: s, onPressed: _resume),
+                    SizedBox(height: 8 * s),
+                    _NeonButton(
+                      label: 'REINICIAR',
+                      s: s,
+                      filled: false,
+                      onPressed: () {
+                        widget.game.startGame();
+                        widget.gameFocus.requestFocus();
+                      },
+                    ),
+                    SizedBox(height: 8 * s),
+                    _NeonButton(
+                      label: 'MENÚ PRINCIPAL',
+                      s: s,
+                      filled: false,
+                      color: Colors.white,
+                      onPressed: () => _goToMainMenu(context),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                '¡Comiste todos los puntos!\nPuntuación: ${game.score}',
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 18, color: Colors.white),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.yellow,
-                  foregroundColor: Colors.black,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                ),
-                onPressed: () => game.startGame(),
-                child: const Text(
-                  'Reiniciar',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -1177,6 +1799,68 @@ class Dot extends PositionComponent with HasGameReference<PacManGame> {
 }
 
 // -----------------------------------------------------------------------------
+// PROGRESSBAR: BARRA DE PROGRESO DEL NIVEL
+// -----------------------------------------------------------------------------
+
+/// Barra de progreso del nivel, debajo del laberinto.
+///
+/// Se llena conforme Pac-Man se come los puntos y pasa de amarillo a verde.
+/// Al llegar al 100 % se dispara la victoria.
+class ProgressBar extends PositionComponent with HasGameReference<PacManGame> {
+  ProgressBar() {
+    priority = 40;
+  }
+
+  @override
+  void render(Canvas canvas) {
+    final total = game.totalDots;
+    final progress = total == 0
+        ? 0.0
+        : ((total - game.dotsRemaining) / total).clamp(0.0, 1.0).toDouble();
+
+    final x = game.mazeOffsetX;
+    const y = 414.0;
+    final width = game.maxCols * game.tileSize; // Mismo ancho que el laberinto
+    const height = 12.0;
+
+    final bg = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, y, width, height), const Radius.circular(6));
+    canvas.drawRRect(bg, Paint()..color = const Color(0xFF222222));
+
+    if (progress > 0) {
+      final fill = RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, y, width * progress, height),
+          const Radius.circular(6));
+      canvas.drawRRect(
+        fill,
+        Paint()..color = Color.lerp(Colors.yellow, Colors.greenAccent, progress)!,
+      );
+    }
+
+    canvas.drawRRect(
+      bg,
+      Paint()
+        ..color = Colors.white54
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+
+    TextPaint(
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 9,
+        fontWeight: FontWeight.bold,
+      ),
+    ).render(
+      canvas,
+      'PROGRESO ${(progress * 100).round()}%',
+      Vector2(x + width / 2, y + height / 2),
+      anchor: Anchor.center,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // HABILIDADES ESPECIALES
 // -----------------------------------------------------------------------------
 
@@ -1386,7 +2070,8 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   Vector2? _prevPac;
 
   bool get _isActive => _t < AbilityConfig.laserActiveSeconds;
-  bool get _isWarning => !_isActive && _t >= _cycle - AbilityConfig.laserWarningSeconds;
+  bool get _isWarning =>
+      !_isActive && _t >= _cycle - AbilityConfig.laserWarningSeconds;
 
   bool _operational(Ghost? g) =>
       g != null && g.isMounted && !g.isDead && !g.isLeavingSpawn && !g.isScared;
@@ -1411,11 +2096,14 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
       final a = _centerOf(inky!);
       final b = _centerOf(clyde!);
 
-      final onBeam = _distPointToSegment(pac, a, b) <= AbilityConfig.laserHitRadius;
-      final crossed = _prevPac != null && _segmentsIntersect(_prevPac!, pac, a, b);
+      final onBeam =
+          _distPointToSegment(pac, a, b) <= AbilityConfig.laserHitRadius;
+      final crossed =
+          _prevPac != null && _segmentsIntersect(_prevPac!, pac, a, b);
 
       if (onBeam || crossed) {
-        game.triggerGameOver(cause: 'Te alcanzó el láser de Inky (3) y Clyde (4)');
+        game.triggerGameOver(
+            cause: 'Te alcanzó el láser de Inky (3) y Clyde (4)');
       }
     }
     _prevPac = pac;
@@ -1965,7 +2653,8 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
       center,
       radius,
       Paint()
-        ..color = Colors.redAccent.withAlpha((25 + 60 * game.magnetStrength).round())
+        ..color =
+            Colors.redAccent.withAlpha((25 + 60 * game.magnetStrength).round())
         ..style = PaintingStyle.fill,
     );
     canvas.drawCircle(
@@ -2126,8 +2815,8 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
       return true;
     }
     final back = -moveDir;
-    if (_canEnterTile(
-        gridPos.x.toInt() + back.x.toInt(), gridPos.y.toInt() + back.y.toInt())) {
+    if (_canEnterTile(gridPos.x.toInt() + back.x.toInt(),
+        gridPos.y.toInt() + back.y.toInt())) {
       moveDir = back;
       return true;
     }
@@ -2144,9 +2833,8 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     if (_builderTimer > 0) return;
 
     // Si no hay una casilla válida, reintenta en un segundo.
-    _builderTimer = game.tryPlaceBuilderWall()
-        ? AbilityConfig.builderCooldown
-        : 1.0;
+    _builderTimer =
+        game.tryPlaceBuilderWall() ? AbilityConfig.builderCooldown : 1.0;
   }
 
   /// Colisión con Pac-Man: asustado = muere (200/400/800/1600 pts); normal =

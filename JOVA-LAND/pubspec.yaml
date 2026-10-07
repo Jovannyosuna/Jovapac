@@ -18,10 +18,17 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: "^0.13.1"
+
+flutter_launcher_icons:
+  image_path: "assets/images/icon.png"
+  android: true
+  ios: true
 
 flutter:
   uses-material-design: true
   assets:
+    - assets/images/icon.png
     - assets/images/jova_logo.png
     - assets/images/game_over.png
     - assets/images/pacman.png
@@ -30,3 +37,4 @@ flutter:
     - assets/images/niga.png
     - assets/images/mori.png
     - assets/images/win.png
+    - assets/images/power.png

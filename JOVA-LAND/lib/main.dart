@@ -10,14 +10,21 @@
 // -----------------------------------------------------------------------------
 //   El jugador recorre un laberinto comiendo puntos mientras huye de cuatro
 //   fantasmas, cada uno con su propia personalidad y una habilidad especial.
-//   Al comer un punto grande (power-up) los fantasmas se asustan (sprite
+//   Los fantasmas son Shardox, Vespakron, Kyros y Pyros. Al comer una mydra
+//   (punto grande) todos se asustan (cada uno cambia a su propia versión
 //   "niga") y pueden ser comidos. Un fantasma comido se convierte en "mori" y
 //   regresa a su base, donde vuelve a ser un fantasma normal.
 //
-//   - Se GANA al comer todos los puntos (pantalla win.png).
-//   - Se PIERDE si un fantasma normal toca al jugador o si lo alcanza el láser
-//     (pantalla game_over.png).
-//   - Una barra de progreso bajo el laberinto indica cuánto falta para ganar.
+//   - Se GANA al comer todas las rimoras (puntos) y mydras (pantalla win.png).
+//   - El jugador tiene 3 VIDAS (3 corazones a la derecha del laberinto). Si un
+//     fantasma normal lo toca o lo alcanza el láser, pierde una vida: Pac-Man
+//     parpadea 3 s y la partida continúa con los puntos ya comidos.
+//   - Se PIERDE al quedarse sin las 3 vidas (pantalla game_over.png); al
+//     reiniciar, todo empieza desde cero.
+//   - Cada vez que empieza o se reanuda una partida aparece una cuenta
+//     regresiva de 3 a 0 antes de poder moverse.
+//   - Al abrir la app se pide un nombre (máx. 12 caracteres) que aparece sobre
+//     el Pac-Man durante la partida.
 //
 // -----------------------------------------------------------------------------
 // CONTROLES
@@ -47,7 +54,9 @@
 //                   encima del juego.
 //   Lienzo virtual  Área fija de 900 x 432 en la que se diseña el juego. Se
 //                   escala para ajustarse a cualquier pantalla.
-//   Power-up        Punto grande que asusta a los fantasmas.
+//   Rimora          Punto normal del laberinto (imagen rimora.png).
+//   Mydra           Punto grande (power-up) que asusta a los fantasmas
+//                   (imagen mydra.png).
 //
 // -----------------------------------------------------------------------------
 // ARQUITECTURA GENERAL
@@ -58,8 +67,9 @@
 //     MainMenuScreen --(botón)--> GameScreen --contiene--> GameWidget
 //                                                              |
 //                                                          PacManGame
-//                                       (hijos: PlayerPacman, Ghost, Dot, Wall,
-//                                        TempWall, LaserLink, ProgressBar)
+//                                       (hijos: PlayerPacman, Ghost, Rimora, Wall,
+//                                        TempWall, LaserLink, LivesDisplay,
+//                                        CountdownOverlay)
 //
 //   PacManGame es el "director": guarda el estado (puntos, victoria, derrota),
 //   y los componentes consultan ese estado a través de `game`. Los overlays
@@ -81,20 +91,36 @@
 //      y contenedor del juego)
 //   3. Núcleo del juego (PacManGame)
 //   4. Menús superpuestos (Game Over, Victoria y Pausa)
-//   5. Entidades: PlayerPacman, Dot, ProgressBar, Ghost y Wall
+//   5. Entidades: PlayerPacman, Rimora, LivesDisplay, CountdownOverlay, Ghost y Wall
 //   6. IA de fantasmas: modos globales, personalidades y toma de decisiones
 //   7. Velocidades: tabla relativa, túneles, modo asustado y Cruise Elroy
-//   8. Habilidades especiales: Imán (Blinky), Constructor (Pinky) y
-//      Láser (Inky y Clyde)
+//   8. Habilidades especiales: Imán (Shardox), Constructor (Vespakron) y
+//      Láser (Kyros y Pyros)
+//
+// -----------------------------------------------------------------------------
+// DISEÑO VISUAL
+// -----------------------------------------------------------------------------
+//   Estética synthwave: fondo morado profundo (0xFF07051A / 0xFF2A0F5C) con
+//   acentos rosa y cian, muros con borde neón violeta y estrellas fijas en el
+//   menú. Ningún elemento decorativo parpadea. Las vidas son corazones de
+//   cristal facetados que se rompen en pedazos al perderse.
 //
 // -----------------------------------------------------------------------------
 // RECURSOS REQUERIDOS (carpeta assets/images/, declarada en pubspec.yaml)
 // -----------------------------------------------------------------------------
-//   pacman.png, ghost.png, dot.png, power.png, niga.png, mori.png,
-//   game_over.png, win.png, jova_logo.png
-//   Opcionales: ghost_pinky.png, ghost_inky.png, ghost_clyde.png (para verlos
-//   dentro de la partida hay que agregarlos a la lista de precarga de
-//   PacManGame.onLoad; en el menú se muestran sin ese paso).
+//   Jugador (Vance):      vance.png
+//   Pantallas:            jova_logo.png, game_over.png, win.png
+//   Rimora y mydra:       rimora.png, mydra.png
+//   Fantasma comido:      mori.png
+//   Fantasmas (normales): shardox.png, vespakron.png, kyros.png, pyros.png
+//   Fantasmas (asustados): shardoxniga.png, vespakronniga.png,
+//                         kyrosniga.png, pyrosniga.png
+//   Icono de la app:      icon.png
+//   Todos deben estar declarados en la sección assets de pubspec.yaml, y los
+//   nombres deben coincidir exactamente (en minúsculas).
+//   Los nombres de archivo de los fantasmas se definen en un solo lugar: las
+//   clases ShardoxPersonality, VespakronPersonality, KyrosPersonality y
+//   PyrosPersonality (propiedades spriteAsset y scaredSpriteAsset).
 //   Si alguna imagen no está disponible, el juego usa figuras de respaldo
 //   (círculos y cuadros de color) y continúa funcionando.
 // =============================================================================
@@ -105,7 +131,8 @@
 //  - flame/game.dart:      FlameGame, el motor base del juego.
 //  - flame/components.dart: PositionComponent, Sprite, Vector2 y TextComponent.
 //  - flame/events.dart:    KeyboardEvents, para leer el teclado.
-//  - services.dart:        control del sistema (orientación, teclas lógicas).
+//  - services.dart:        control del sistema (orientación, teclas lógicas,
+//                          rootBundle para comprobar si existe una imagen).
 //  - dart:math:            min, max, sin, pi y Random.
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -178,6 +205,10 @@ const double _mazeVirtualH = 16 * 24.0;
 const Color _neonLime = Color(0xFFC8FF00);
 /// Naranja de la identidad visual (relleno de las letras de mis imágenes).
 const Color _neonOrange = Color(0xFFFF6A00);
+
+/// Nombre del jugador. Se pide al abrir la app y se muestra sobre el Pac-Man.
+/// Vive mientras la app está abierta (también al volver al menú principal).
+String playerName = '';
 
 /// Reserva exactamente el área que ocupa el laberinto en pantalla.
 ///
@@ -285,6 +316,478 @@ class _NeonButton extends StatelessWidget {
   }
 }
 
+/// Cuadro de diálogo "Por favor escriba un nombre".
+///
+/// Acepta letras, números y espacios, con un límite de 12 caracteres. Devuelve
+/// el nombre (sin espacios sobrantes) al aceptar. Si [canCancel] es `false`
+/// no se puede cerrar sin escribir un nombre.
+class _NameDialog extends StatefulWidget {
+  const _NameDialog({required this.initial, required this.canCancel});
+
+  /// Texto con el que arranca el campo (el nombre actual, si ya hay uno).
+  final String initial;
+  /// Si es `true` se muestra el botón Cancelar y se permite cerrar con "atrás".
+  final bool canCancel;
+
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final TextEditingController _c =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  /// Acepta el nombre solo si no está vacío.
+  void _submit() {
+    final name = _c.text.trim();
+    if (name.isEmpty) return;
+    Navigator.pop(context, name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: widget.canCancel,
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: SingleChildScrollView(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF2A0F5C), Color(0xFF07051A)],
+              ),
+              border: Border.all(color: Colors.cyanAccent, width: 2.5),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.cyanAccent.withAlpha(90),
+                    blurRadius: 26,
+                    spreadRadius: 1),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'POR FAVOR ESCRIBA UN NOMBRE',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 2,
+                    color: _neonLime,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Aparecerá sobre tu Pac-Man (máximo 12 letras)',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: Colors.white60),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _c,
+                  autofocus: true,
+                  maxLength: 12,
+                  textAlign: TextAlign.center,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(
+                        RegExp(r'[\p{L}\p{N} ]', unicode: true)),
+                  ],
+                  cursorColor: Colors.pinkAccent,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 3,
+                    color: Colors.white,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'TU NOMBRE',
+                    hintStyle: const TextStyle(
+                        color: Colors.white24, letterSpacing: 3),
+                    counterStyle: const TextStyle(color: Colors.white54),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide:
+                          const BorderSide(color: Colors.pinkAccent, width: 2),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide:
+                          const BorderSide(color: Colors.cyanAccent, width: 2),
+                    ),
+                  ),
+                  onSubmitted: (_) => _submit(),
+                ),
+                const SizedBox(height: 8),
+                // El botón se atenúa mientras el campo esté vacío.
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _c,
+                  builder: (context, value, _) {
+                    final empty = value.text.trim().isEmpty;
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (widget.canCancel) ...[
+                          _NeonButton(
+                            label: 'CANCELAR',
+                            s: 1.4,
+                            filled: false,
+                            color: Colors.white,
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                        Opacity(
+                          opacity: empty ? 0.4 : 1.0,
+                          child: _NeonButton(
+                              label: 'ACEPTAR', s: 1.4, onPressed: _submit),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Muestra la ventana "¿Cómo se juega?" (PC y móvil).
+Future<void> _showHowToPlay(BuildContext context) {
+  return showDialog<void>(
+    context: context,
+    builder: (_) => const _InfoDialog(
+      title: '¿CÓMO SE JUEGA?',
+      accent: Colors.cyanAccent,
+      child: _HowToPlayContent(),
+    ),
+  );
+}
+
+/// Muestra la ventana con todos los personajes (foto y nombre).
+Future<void> _showCharacters(BuildContext context) {
+  return showDialog<void>(
+    context: context,
+    builder: (_) => const _InfoDialog(
+      title: 'PERSONAJES',
+      accent: Colors.pinkAccent,
+      child: _CharactersContent(),
+    ),
+  );
+}
+
+/// Marco neón reutilizable para las ventanas informativas del menú: título,
+/// contenido desplazable y botón Cerrar.
+class _InfoDialog extends StatelessWidget {
+  const _InfoDialog({
+    required this.title,
+    required this.accent,
+    required this.child,
+  });
+
+  /// Título de la ventana.
+  final String title;
+  /// Color del borde, del resplandor y del título.
+  final Color accent;
+  /// Contenido (se desplaza si no cabe en pantalla).
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxHeight = MediaQuery.of(context).size.height * 0.9;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(12),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 560, maxHeight: maxHeight),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(22, 16, 22, 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: const LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF2A0F5C), Color(0xFF07051A)],
+            ),
+            border: Border.all(color: accent, width: 2.5),
+            boxShadow: [
+              BoxShadow(
+                  color: accent.withAlpha(90), blurRadius: 26, spreadRadius: 1),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 3,
+                  color: accent,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Flexible(child: SingleChildScrollView(child: child)),
+              const SizedBox(height: 12),
+              _NeonButton(
+                label: 'CERRAR',
+                s: 1.2,
+                filled: false,
+                color: accent,
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bloque de texto con título de color y una lista de líneas con viñeta.
+class _InfoSection extends StatelessWidget {
+  const _InfoSection({
+    required this.title,
+    required this.color,
+    required this.lines,
+  });
+
+  final String title;
+  final Color color;
+  final List<String> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.8,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (final line in lines)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text(
+                '•  $line',
+                style: const TextStyle(
+                    fontSize: 13, height: 1.3, color: Colors.white70),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Contenido de "¿Cómo se juega?": objetivo, controles de PC y de móvil, y
+/// algunos consejos.
+class _HowToPlayContent extends StatelessWidget {
+  const _HowToPlayContent();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _InfoSection(
+          title: 'OBJETIVO',
+          color: _neonLime,
+          lines: [
+            'Come todas las rimoras del laberinto sin que los fantasmas te atrapen.',
+            'Tienes 3 vidas (corazones de cristal). Si pierdes las 3, la partida termina.',
+          ],
+        ),
+        _InfoSection(
+          title: 'EN COMPUTADORA',
+          color: Colors.cyanAccent,
+          lines: [
+            'Flechas del teclado: mueve a tu personaje.',
+            'ESC: pausa o reanuda el juego.',
+          ],
+        ),
+        _InfoSection(
+          title: 'EN CELULAR O TABLET',
+          color: Colors.pinkAccent,
+          lines: [
+            'Desliza el dedo en la dirección a la que quieres ir.',
+            'Toca la esquina superior izquierda de la pantalla para pausar o reanudar.',
+          ],
+        ),
+        _InfoSection(
+          title: 'CONSEJOS',
+          color: Colors.yellowAccent,
+          lines: [
+            'Las mydras (puntos grandes) asustan a los fantasmas: ¡puedes comerlos por más puntos!',
+            'Cuidado con el láser entre Kyros y Pyros, las paredes de Vespakron y la atracción de Shardox.',
+            'Cuando pierdes una vida, la partida sigue con las rimoras que ya comiste.',
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Datos de un personaje para la galería.
+class _CharInfo {
+  const _CharInfo(this.name, this.asset, this.color, [this.description]);
+
+  /// Nombre que se muestra.
+  final String name;
+  /// Ruta completa de la imagen.
+  final String asset;
+  /// Color del borde y del nombre.
+  final Color color;
+  /// Descripción que se muestra bajo el nombre (opcional).
+  final String? description;
+}
+
+/// Datos de galería de un fantasma, tomados de su personalidad.
+_CharInfo _ghostInfo(GhostType type) {
+  final p = GhostPersonality.of(type);
+  return _CharInfo(
+      p.displayName, 'assets/images/${p.spriteAsset}', p.color, p.description);
+}
+
+/// Galería de personajes: foto y nombre de Shardox, Vespakron, Kyros, Pyros,
+/// Rimora y Mydra.
+class _CharactersContent extends StatelessWidget {
+  const _CharactersContent();
+
+  @override
+  Widget build(BuildContext context) {
+    // Los fantasmas toman nombre, imagen, color y descripción de su
+    // personalidad, así la galería siempre coincide con lo que se ve en la
+    // partida. Pyros va antes que Kyros porque Kyros es "hermano de Pyros".
+    final items = <_CharInfo>[
+      for (final type in const [
+        GhostType.shardox,
+        GhostType.vespakron,
+        GhostType.pyros,
+        GhostType.kyros,
+      ])
+        _ghostInfo(type),
+      const _CharInfo('Rimora', 'assets/images/rimora.png', Colors.white),
+      const _CharInfo('Mydra', 'assets/images/mydra.png', _neonLime),
+    ];
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 12,
+      runSpacing: 12,
+      children: [for (final c in items) _CharacterCard(info: c)],
+    );
+  }
+}
+
+/// Tarjeta de un personaje: imagen arriba y nombre abajo.
+class _CharacterCard extends StatelessWidget {
+  const _CharacterCard({required this.info});
+
+  final _CharInfo info;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      // Las tarjetas con descripción son más anchas (caben 2 por fila).
+      width: info.description != null ? 250 : 112,
+      padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
+      decoration: BoxDecoration(
+        color: info.color.withAlpha(25),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: info.color.withAlpha(180), width: 1.5),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 60,
+            height: 60,
+            child: Image.asset(
+              info.asset,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+              // Si falta la imagen se muestra un cuadro del color del personaje.
+              errorBuilder: (context, error, stackTrace) => DecoratedBox(
+                decoration: BoxDecoration(
+                  color: info.color,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            info.name.toUpperCase(),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.5,
+              color: info.color,
+            ),
+          ),
+          if (info.description != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              info.description!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 11.5, height: 1.3, color: Colors.white70),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Estrellas fijas del fondo (posiciones repetibles con semilla; no parpadean).
+class _StarsPainter extends CustomPainter {
+  const _StarsPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rnd = Random(7); // Semilla fija = siempre las mismas estrellas.
+    final paint = Paint();
+    for (int i = 0; i < 70; i++) {
+      final x = rnd.nextDouble() * size.width;
+      final y = rnd.nextDouble() * size.height;
+      final r = 0.4 + rnd.nextDouble() * 1.2;
+      paint.color = (i.isEven ? Colors.cyanAccent : Colors.pinkAccent)
+          .withAlpha(60 + rnd.nextInt(120));
+      canvas.drawCircle(Offset(x, y), r, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 /// Pantalla de inicio (menú principal).
 ///
 /// - El logotipo `jova_logo.png` se estira al ancho del laberinto y flota
@@ -311,6 +814,28 @@ class _MainMenuScreenState extends State<MainMenuScreen>
       AnimationController(vsync: this, duration: const Duration(seconds: 8))
         ..repeat();
 
+  /// Al abrir el menú, si todavía no hay nombre, se pide uno.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && playerName.isEmpty) _askName();
+    });
+  }
+
+  /// Muestra el cuadro "Por favor escriba un nombre". La primera vez no se
+  /// puede cerrar sin escribir uno; al cambiarlo después sí se puede cancelar.
+  Future<void> _askName({bool canCancel = false}) async {
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _NameDialog(initial: playerName, canCancel: canCancel),
+    );
+    if (result != null && mounted) {
+      setState(() => playerName = result);
+    }
+  }
+
   /// Libera el controlador de animación al salir de la pantalla (evita fugas
   /// de memoria).
   @override
@@ -319,23 +844,50 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     super.dispose();
   }
 
-  /// Construye el menú en capas (de abajo hacia arriba): fondo, tira animada
-  /// de personajes y contenido principal.
+  /// Construye el menú en capas (de abajo hacia arriba): fondo, estrellas,
+  /// línea de neón, tira animada de personajes y contenido principal.
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF07051A),
       body: Stack(
         children: [
-          // Fondo con resplandor azul.
+          // Fondo synthwave: degradado + estrellas fijas.
           const Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment(0, -0.3),
-                  radius: 1.1,
-                  colors: [Color(0xFF14146B), Colors.black],
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF07051A),
+                    Color(0xFF2A0F5C),
+                    Color(0xFF07051A)
+                  ],
+                  stops: [0.0, 0.55, 1.0],
                 ),
+              ),
+            ),
+          ),
+          const Positioned.fill(child: CustomPaint(painter: _StarsPainter())),
+          // Línea de neón sobre la tira animada.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 52,
+            height: 2,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [
+                  Colors.transparent,
+                  Colors.pinkAccent,
+                  Colors.cyanAccent,
+                  Colors.transparent,
+                ]),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.pinkAccent.withAlpha(120), blurRadius: 10),
+                ],
               ),
             ),
           ),
@@ -375,6 +927,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                             'assets/images/jova_logo.png',
                             width: double.infinity,
                             fit: BoxFit.contain,
+                            gaplessPlayback: true,
                             errorBuilder: (context, error, stackTrace) {
                               return Center(
                                 child: Text(
@@ -412,16 +965,44 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                         ),
                       ),
                       SizedBox(height: 8 * s),
-                      Text(
-                        'FLECHAS O DESLIZA PARA MOVERTE   ·   ESC O ESQUINA SUPERIOR IZQUIERDA = PAUSA',
-                        style: TextStyle(
-                          fontSize: 6.5 * s,
-                          letterSpacing: 1.4,
-                          color: Colors.white60,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      // Botones informativos: cómo se juega y galería de personajes.
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _NeonButton(
+                            label: '¿CÓMO SE JUEGA?',
+                            s: s * 0.85,
+                            filled: false,
+                            color: Colors.cyanAccent,
+                            onPressed: () => _showHowToPlay(context),
+                          ),
+                          SizedBox(width: 12 * s),
+                          _NeonButton(
+                            label: 'PERSONAJES',
+                            s: s * 0.85,
+                            filled: false,
+                            color: Colors.pinkAccent,
+                            onPressed: () => _showCharacters(context),
+                          ),
+                        ],
                       ),
-                      SizedBox(height: 3 * s),
+                      SizedBox(height: 6 * s),
+                      // Nombre actual; al tocarlo se puede cambiar.
+                      if (playerName.isNotEmpty) ...[
+                        GestureDetector(
+                          onTap: () => _askName(canCancel: true),
+                          child: Text(
+                            'JUGADOR: ${playerName.toUpperCase()}   ·   TOCA PARA CAMBIAR',
+                            style: TextStyle(
+                              fontSize: 6.5 * s,
+                              letterSpacing: 1.4,
+                              color: Colors.cyanAccent,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 3 * s),
+                      ],
                       Text(
                         'Hecho por Gabriel Jovanny Osuna Martínez',
                         style: TextStyle(fontSize: 6 * s, color: Colors.white30),
@@ -442,17 +1023,27 @@ class _MainMenuScreenState extends State<MainMenuScreen>
 
 /// Tira animada del menú hecha con los sprites de mi juego.
 ///
-/// El jugador (`pacman.png`) recorre la pantalla comiéndose los puntos
-/// (`dot.png`) mientras los 4 fantasmas lo persiguen. Cada fantasma usa su
-/// sprite propio (`ghost_pinky.png`, ...) y, si no existe, `ghost.png`, igual
-/// que dentro del juego. Si falta cualquier imagen se dibuja una figura de
-/// respaldo. [animation] va de 0.0 a 1.0 y se repite.
-class _SpriteChase extends StatelessWidget {
+/// El jugador (`vance.png`) recorre la pantalla comiéndose las rimoras
+/// (`rimora.png`) mientras Shardox, Vespakron, Kyros y Pyros lo persiguen. Cada
+/// uno usa SU propio sprite (el mismo que dentro de la partida); ya no hay un
+/// sprite genérico de fantasma. Si falta una imagen se dibuja una figura de
+/// respaldo del color del personaje. [animation] va de 0.0 a 1.0 y se repite.
+///
+/// Para evitar parpadeos, al iniciar se comprueba UNA sola vez qué imágenes
+/// existen, se precargan y los sprites se construyen una única vez; en cada
+/// frame solo se cambia su posición.
+class _SpriteChase extends StatefulWidget {
   const _SpriteChase({required this.animation});
 
   /// Animación de 0.0 a 1.0 que se repite; dirige todo el movimiento.
   final Animation<double> animation;
 
+  @override
+  State<_SpriteChase> createState() => _SpriteChaseState();
+}
+
+/// Estado de la tira animada: guarda los sprites ya construidos.
+class _SpriteChaseState extends State<_SpriteChase> {
   /// Tamaño (px) de cada personaje.
   static const double _size = 34;
   /// Separación horizontal entre puntos (px).
@@ -460,86 +1051,118 @@ class _SpriteChase extends StatelessWidget {
   /// Distancia horizontal entre fantasmas consecutivos (px).
   static const double _ghostGap = 46;
 
-  /// Del más cercano a Pac-Man al más lejano: Blinky, Pinky, Inky y Clyde.
-  static const List<String> _ghostAssets = [
-    'assets/images/ghost.png',
-    'assets/images/ghost_pinky.png',
-    'assets/images/ghost_inky.png',
-    'assets/images/ghost_clyde.png',
-  ];
-  /// Colores de respaldo si falta la imagen de un fantasma (mismo orden que
-  /// [_ghostAssets]).
-  static const List<Color> _ghostColors = [
-    Colors.red,
-    Colors.pinkAccent,
-    Colors.cyanAccent,
-    Colors.orange,
-  ];
+  // Los personajes se recorren en el orden de [GhostType.values], del más
+  // cercano a Pac-Man al más lejano: Shardox, Vespakron, Kyros y Pyros. Sus
+  // imágenes y colores salen de [GhostPersonality].
 
-  /// Sprite del jugador (círculo amarillo si falta la imagen).
-  Widget _player() {
-    return SizedBox(
-      width: _size,
-      height: _size,
-      child: Image.asset(
-        'assets/images/pacman.png',
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => const DecoratedBox(
+  // Widgets construidos UNA sola vez (así Flutter no los reconstruye por frame).
+  Widget? _player;
+  Widget? _dot;
+  List<Widget> _ghosts = const [];
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // precacheImage necesita el contexto, por eso se inicia aquí y solo una vez.
+    if (!_started) {
+      _started = true;
+      _prepare();
+    }
+  }
+
+  /// Devuelve la primera ruta que exista en los assets (o null).
+  Future<String?> _firstExisting(List<String> paths) async {
+    for (final p in paths) {
+      try {
+        await rootBundle.load(p);
+        return p;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Crea un sprite estable: sin parpadeo al recargar y con respaldo fijo.
+  Widget _sprite(String? path, Widget fallback, double size) {
+    return RepaintBoundary(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: path == null
+            ? fallback
+            : Image.asset(
+                path,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                errorBuilder: (context, error, stackTrace) => fallback,
+              ),
+      ),
+    );
+  }
+
+  /// Comprueba qué imágenes existen, las precarga y construye los widgets.
+  Future<void> _prepare() async {
+    final playerPath = await _firstExisting(['assets/images/vance.png']);
+    final dotPath = await _firstExisting(['assets/images/rimora.png']);
+    final ghostPaths = <String?>[];
+    for (final type in GhostType.values) {
+      final file = GhostPersonality.of(type).spriteAsset;
+      ghostPaths.add(await _firstExisting(['assets/images/$file']));
+    }
+    if (!mounted) return;
+
+    // Precarga: la imagen ya está lista cuando se dibuja por primera vez.
+    for (final p in [playerPath, dotPath, ...ghostPaths]) {
+      if (p != null) await precacheImage(AssetImage(p), context);
+      if (!mounted) return;
+    }
+
+    setState(() {
+      _player = _sprite(
+        playerPath,
+        const DecoratedBox(
           decoration: BoxDecoration(color: Colors.yellow, shape: BoxShape.circle),
         ),
-      ),
-    );
-  }
-
-  /// Sprite del fantasma número [i]. Respaldo en cadena: imagen propia ->
-  /// `ghost.png` -> cuadro de color.
-  Widget _ghost(int i) {
-    return SizedBox(
-      width: _size,
-      height: _size,
-      child: Image.asset(
-        _ghostAssets[i],
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => Image.asset(
-          'assets/images/ghost.png',
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) => DecoratedBox(
-            decoration: BoxDecoration(
-              color: _ghostColors[i],
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Punto comestible (círculo blanco si falta `dot.png`).
-  Widget _dot() {
-    return SizedBox(
-      width: 8,
-      height: 8,
-      child: Image.asset(
-        'assets/images/dot.png',
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => const DecoratedBox(
+        _size,
+      );
+      _dot = _sprite(
+        dotPath,
+        const DecoratedBox(
           decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle),
         ),
-      ),
-    );
+        8,
+      );
+      _ghosts = [
+        for (int i = 0; i < ghostPaths.length; i++)
+          _sprite(
+            ghostPaths[i],
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: GhostPersonality.of(GhostType.values[i]).color,
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            _size,
+          ),
+      ];
+    });
   }
 
   /// Dibuja un fotograma de la animación: puntos, fantasmas y jugador.
   @override
   Widget build(BuildContext context) {
+    // Hasta que todo esté listo no se dibuja nada (evita el "salto" inicial).
+    if (_player == null || _dot == null || _ghosts.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return ClipRect(
       child: LayoutBuilder(builder: (context, c) {
         final w = c.maxWidth;
         final h = c.maxHeight;
         return AnimatedBuilder(
-          animation: animation,
+          animation: widget.animation,
           builder: (context, _) {
-            final t = animation.value;
+            final t = widget.animation.value;
             // El jugador entra por la izquierda (fuera de pantalla) y sale por la derecha.
             // El margen extra permite que los fantasmas también salgan completos.
             final pacX = -230 + t * (w + 460);
@@ -550,22 +1173,35 @@ class _SpriteChase extends StatelessWidget {
 
             final items = <Widget>[];
 
-            // Puntos: desaparecen al pasar el jugador.
-            for (double x = _dotSpacing / 2; x < w; x += _dotSpacing) {
+            // Puntos con clave fija: Flutter reutiliza el mismo widget y solo
+            // deja de dibujar los que el jugador ya se comió.
+            int n = 0;
+            for (double x = _dotSpacing / 2; x < w; x += _dotSpacing, n++) {
               if (x > pacX + _size / 2) {
-                items.add(Positioned(left: x - 4, top: h / 2 - 4, child: _dot()));
+                items.add(Positioned(
+                  key: ValueKey('dot$n'),
+                  left: x - 4,
+                  top: h / 2 - 4,
+                  child: _dot!,
+                ));
               }
             }
             // Fantasmas detrás (el más lejano primero).
-            for (int i = _ghostAssets.length - 1; i >= 0; i--) {
+            for (int i = _ghosts.length - 1; i >= 0; i--) {
               items.add(Positioned(
+                key: ValueKey('ghost$i'),
                 left: pacX - (i + 1) * _ghostGap,
                 top: top + bob(i * 1.3),
-                child: _ghost(i),
+                child: _ghosts[i],
               ));
             }
             // Jugador al frente.
-            items.add(Positioned(left: pacX, top: top + bob(0), child: _player()));
+            items.add(Positioned(
+              key: const ValueKey('player'),
+              left: pacX,
+              top: top + bob(0),
+              child: _player!,
+            ));
 
             return Stack(children: items);
           },
@@ -606,65 +1242,66 @@ class _GameScreenState extends State<GameScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF07051A),
       // Capas (de abajo hacia arriba): 1) el juego con los gestos de deslizamiento
       // y 2) la zona invisible de pausa.
       body: Stack(
         children: [
-      GestureDetector(
-        // Se usa la componente dominante del desplazamiento para decidir si
-        // el gesto es horizontal o vertical. El umbral de 1.5 px evita que
-        // movimientos mínimos del dedo se interpreten como un giro.
-        onPanUpdate: (details) {
-          if (!gameInstance.isGameOver &&
-              !gameInstance.isGameWon &&
-              !gameInstance.isPaused) {
-            if (details.delta.dx.abs() > details.delta.dy.abs()) {
-              if (details.delta.dx > 1.5) {
-                gameInstance.player.changeDirection(Vector2(1, 0)); // Derecha
-              } else if (details.delta.dx < -1.5) {
-                gameInstance.player.changeDirection(Vector2(-1, 0)); // Izquierda
+          GestureDetector(
+            // Se usa la componente dominante del desplazamiento para decidir si
+            // el gesto es horizontal o vertical. El umbral de 1.5 px evita que
+            // movimientos mínimos del dedo se interpreten como un giro.
+            onPanUpdate: (details) {
+              if (!gameInstance.isGameOver &&
+                  !gameInstance.isGameWon &&
+                  !gameInstance.isDying &&
+                  !gameInstance.isPaused) {
+                if (details.delta.dx.abs() > details.delta.dy.abs()) {
+                  if (details.delta.dx > 1.5) {
+                    gameInstance.player.changeDirection(Vector2(1, 0)); // Derecha
+                  } else if (details.delta.dx < -1.5) {
+                    gameInstance.player.changeDirection(Vector2(-1, 0)); // Izquierda
+                  }
+                } else {
+                  if (details.delta.dy > 1.5) {
+                    gameInstance.player.changeDirection(Vector2(0, 1)); // Abajo
+                  } else if (details.delta.dy < -1.5) {
+                    gameInstance.player.changeDirection(Vector2(0, -1)); // Arriba
+                  }
+                }
               }
-            } else {
-              if (details.delta.dy > 1.5) {
-                gameInstance.player.changeDirection(Vector2(0, 1)); // Abajo
-              } else if (details.delta.dy < -1.5) {
-                gameInstance.player.changeDirection(Vector2(0, -1)); // Arriba
-              }
-            }
-          }
-        },
-        child: SizedBox.expand(
-          child: GameWidget<PacManGame>.controlled(
-            gameFactory: () => gameInstance,
-            // Foco compartido: permite devolverle el teclado al juego al cerrar la pausa.
-            focusNode: _gameFocus,
-            // Registro de menús superpuestos. PacManGame los muestra u oculta por nombre,
-            // por ejemplo con overlays.add('PauseMenu').
-            overlayBuilderMap: {
-              'GameOverMenu': (context, game) => GameOverOverlay(game),
-              'GameWinMenu': (context, game) => GameWinOverlay(game),
-              'PauseMenu': (context, game) => PauseOverlay(game, _gameFocus),
             },
+            child: SizedBox.expand(
+              child: GameWidget<PacManGame>.controlled(
+                gameFactory: () => gameInstance,
+                // Foco compartido: permite devolverle el teclado al juego al cerrar la pausa.
+                focusNode: _gameFocus,
+                // Registro de menús superpuestos. PacManGame los muestra u oculta por nombre,
+                // por ejemplo con overlays.add('PauseMenu').
+                overlayBuilderMap: {
+                  'GameOverMenu': (context, game) => GameOverOverlay(game),
+                  'GameWinMenu': (context, game) => GameWinOverlay(game),
+                  'PauseMenu': (context, game) => PauseOverlay(game, _gameFocus),
+                },
+              ),
+            ),
           ),
-        ),
-      ),
-      // Zona táctil INVISIBLE de pausa: esquina superior izquierda.
-      // Un toque pausa la partida y otro la reanuda.
-      Positioned(
-        top: 0,
-        left: 0,
-        width: 96,
-        height: 72,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            gameInstance.togglePause();
-            _gameFocus.requestFocus();
-          },
-          child: const SizedBox.expand(),
-        ),
-      ),
+          // Zona táctil INVISIBLE de pausa: esquina superior izquierda.
+          // Un toque pausa la partida y otro la reanuda.
+          Positioned(
+            top: 0,
+            left: 0,
+            width: 96,
+            height: 72,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                gameInstance.togglePause();
+                _gameFocus.requestFocus();
+              },
+              child: const SizedBox.expand(),
+            ),
+          ),
         ],
       ),
     );
@@ -696,13 +1333,45 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Indica que el jugador comió todos los puntos.
   bool isGameWon = false;
 
+  // ---------------------------------------------------------------------------
+  // VIDAS, MUERTE Y CUENTA REGRESIVA
+  // ---------------------------------------------------------------------------
+
+  /// Vidas con las que empieza cada partida.
+  static const int maxLives = 3;
+
+  /// Segundos que parpadea Pac-Man al perder una vida.
+  static const double deathBlinkSeconds = 3.0;
+
+  /// Duración de la cuenta regresiva (3, 2, 1, 0) al empezar o reanudar.
+  static const double countdownSeconds = 3.0;
+
+  /// Vidas que le quedan al jugador.
+  int lives = maxLives;
+
+  /// `true` mientras Pac-Man parpadea tras perder una vida.
+  bool isDying = false;
+
+  /// Segundos transcurridos desde que murió (los usa el parpadeo).
+  double deathElapsed = 0.0;
+
+  /// Segundos que faltan de la cuenta regresiva (0 = no hay cuenta).
+  double countdownLeft = 0.0;
+
+  /// `true` mientras se muestra la cuenta regresiva.
+  bool get isCountingDown => countdownLeft > 0;
+
+  /// `true` cuando las entidades deben quedarse quietas: partida terminada,
+  /// animación de muerte o cuenta regresiva.
+  bool get isFrozen => isGameOver || isGameWon || isDying || isCountingDown;
+
   /// Matriz del laberinto (16 filas x 27 columnas).
   ///
   /// Leyenda:
-  /// - `0`: pasillo con punto normal
+  /// - `0`: pasillo con rimora (punto normal)
   /// - `1`: muro
   /// - `2`: casa de los fantasmas (solo transitable por fantasmas)
-  /// - `3`: pasillo con punto grande (power-up)
+  /// - `3`: pasillo con mydra (punto grande / power-up)
   ///
   /// La fila 7 no tiene muros en los extremos y funciona como túnel lateral.
   final List<List<int>> mazeGrid = [
@@ -743,10 +1412,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
   final GhostModeController modeController = GhostModeController();
 
   /// Total de puntos al iniciar la partida.
-  int totalDots = 0;
+  int totalRimoras = 0;
 
   /// Puntos que todavía quedan en el laberinto.
-  int dotsRemaining = 0;
+  int rimorasRemaining = 0;
 
   /// Filas que tienen salida a los extremos del mapa (túneles laterales).
   late final Set<int> tunnelRows = {
@@ -757,14 +1426,14 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Cuántas columnas desde cada extremo cuentan como zona de túnel.
   final int tunnelDepth = 6;
 
-  /// Nivel de Cruise Elroy de Blinky según los puntos restantes:
+  /// Nivel de Cruise Elroy de Shardox según los puntos restantes:
   /// 0 = normal, 1 = Elroy 1, 2 = Elroy 2.
   int get elroyLevel {
     // Primero se evalúa el nivel 2 (más estricto); si no se cumple, el nivel 1.
-    if (dotsRemaining <= (totalDots * GameSpeeds.elroy2DotsFraction).round()) {
+    if (rimorasRemaining <= (totalRimoras * GameSpeeds.elroy2DotsFraction).round()) {
       return 2;
     }
-    if (dotsRemaining <= (totalDots * GameSpeeds.elroy1DotsFraction).round()) {
+    if (rimorasRemaining <= (totalRimoras * GameSpeeds.elroy1DotsFraction).round()) {
       return 1;
     }
     return 0;
@@ -772,6 +1441,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
   /// Indica si una entidad que está en [gridPos], avanzando hacia [dir] con
   /// [progress] (0.0 a 1.0), se encuentra dentro de un túnel lateral.
+  ///
+  /// Nota: con `GameSpeeds.tunnelFactor = 1.0` el túnel ya no modifica la
+  /// velocidad; la función se conserva por si se quiere volver a ajustar.
   bool isInTunnel(Vector2 gridPos, Vector2 dir, double progress) {
     // Posición intermedia real de la entidad, redondeada a la casilla más cercana.
     final col = (gridPos.x + dir.x * progress).round();
@@ -833,9 +1505,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
     if (pacTrail.length > 24) pacTrail.removeAt(0);
   }
 
-  /// Se llama cuando Pac-Man come un power-up: activa el modo Frightened y
+  /// Se llama cuando Pac-Man come una mydra: activa el modo Frightened y
   /// asusta a TODOS los fantasmas a la vez.
-  void onPowerUpEaten() {
+  void onMydraEaten() {
     modeController.startFrightened();
     // Cada power-up reinicia la cadena de puntos por fantasmas comidos.
     _ghostCombo = 0;
@@ -854,24 +1526,24 @@ class PacManGame extends FlameGame with KeyboardEvents {
     return points;
   }
 
-  /// Calcula la atracción del Fantasma Imán (Blinky) sobre Pac-Man.
+  /// Calcula la atracción del Fantasma Imán (Shardox) sobre Pac-Man.
   void _updateMagnet() {
     magnetStrength = 0.0;
-    final blinky = ghosts[GhostType.blinky];
-    if (blinky == null || !blinky.isMounted || !player.isMounted) return;
-    if (blinky.isDead || blinky.isLeavingSpawn || blinky.isScared) return;
+    final shardox = ghosts[GhostType.shardox];
+    if (shardox == null || !shardox.isMounted || !player.isMounted) return;
+    if (shardox.isDead || shardox.isLeavingSpawn || shardox.isScared) return;
 
-    // Vector que apunta desde el jugador hacia Blinky (en casillas).
-    final toBlinky = tilePosOf(blinky) - tilePosOf(player);
-    final dist = toBlinky.length;
+    // Vector que apunta desde el jugador hacia Shardox (en casillas).
+    final toShardox = tilePosOf(shardox) - tilePosOf(player);
+    final dist = toShardox.length;
     // Fuera del radio de acción (o superpuestos: evita dividir entre casi cero).
     if (dist > AbilityConfig.magnetRadiusTiles || dist < 0.001) return;
 
-    // Intensidad lineal: 0 en el borde del radio y 1 pegado a Blinky.
+    // Intensidad lineal: 0 en el borde del radio y 1 pegado a Shardox.
     magnetStrength = 1.0 - dist / AbilityConfig.magnetRadiusTiles;
     // Dirección normalizada (longitud 1). El jugador la usa para saber si avanza
-    // hacia Blinky o se aleja de él.
-    magnetDir = toBlinky / dist;
+    // hacia Shardox o se aleja de él.
+    magnetDir = toShardox / dist;
   }
 
   /// Indica si una entidad ubicada en [grid], que avanza hacia [dir] con avance
@@ -1011,9 +1683,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
     return visited.length;
   }
 
-  /// Color de fondo del juego (negro).
+  /// Color de fondo del juego (morado casi negro, a juego con el menú).
   @override
-  Color backgroundColor() => const Color(0xFF000000);
+  Color backgroundColor() => const Color(0xFF07051A);
 
   // ---------------------------------------------------------------------------
   // ESCALADO RESPONSIVO
@@ -1025,7 +1697,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
   static const double virtualWidth = 900.0;
 
   /// Alto del lienzo virtual: 24 (marcadores) + 16 * 24 (laberinto) +
-  /// espacio para la barra de progreso.
+  /// 24 de margen inferior.
   static const double virtualHeight = 432.0;
 
   /// Factor de escala del lienzo virtual a la pantalla real.
@@ -1039,7 +1711,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
   void onGameResize(Vector2 size) {
     super.onGameResize(size);
     // Se elige el factor MENOR para que el lienzo quepa completo sin deformarse
-    // (quedan franjas negras en el lado sobrante).
+    // (quedan franjas oscuras en el lado sobrante).
     _scale = min(size.x / virtualWidth, size.y / virtualHeight);
     // El espacio sobrante se reparte por igual a ambos lados para centrar.
     _offset = Vector2(
@@ -1070,17 +1742,23 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
     // Precarga de imágenes en la caché. Luego los componentes las leen con
     // images.fromCache(); si alguna falta, se registra el error y se continúa.
-    for (final name in [
-      'pacman.png',
-      'ghost.png',
-      'dot.png',
-      'power.png',
-      'niga.png',
+    // Los sprites de los fantasmas (normal y asustado) salen de cada
+    // personalidad, así que agregar o renombrar uno se hace en un solo lugar.
+    final assets = <String>[
+      'vance.png',
+      'rimora.png',
+      'mydra.png',
       'mori.png',
       'game_over.png',
       'win.png',
-      'jova_logo.png'
-    ]) {
+      'jova_logo.png',
+    ];
+    for (final type in GhostType.values) {
+      final personality = GhostPersonality.of(type);
+      assets.add(personality.spriteAsset);
+      assets.add(personality.scaredSpriteAsset);
+    }
+    for (final name in assets) {
       try {
         await images.load(name);
       } catch (e) {
@@ -1095,9 +1773,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
       position: Vector2(126, 4),
       textRenderer: TextPaint(
         style: const TextStyle(
-          color: Colors.white,
+          color: Colors.cyanAccent,
           fontSize: 13,
-          fontWeight: FontWeight.bold,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.5,
         ),
       ),
     );
@@ -1107,9 +1786,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
       position: Vector2(670, 4),
       textRenderer: TextPaint(
         style: const TextStyle(
-          color: Colors.yellow,
+          color: Colors.pinkAccent,
           fontSize: 13,
-          fontWeight: FontWeight.bold,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.5,
         ),
       ),
     );
@@ -1118,6 +1798,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
     // actualiza y se dibuja automáticamente.
     add(scoreText);
     add(highScoreText);
+    // Corazones de vida (columna derecha) y cuenta regresiva: viven toda la
+    // sesión y consultan el estado del juego al dibujarse.
+    add(LivesDisplay());
+    add(CountdownOverlay());
 
     try {
       // Se protege con try/catch para que un error al crear la partida no impida
@@ -1135,12 +1819,24 @@ class PacManGame extends FlameGame with KeyboardEvents {
   void update(double dt) {
     // El imán se recalcula ANTES de actualizar a los componentes, para que el
     // jugador use el valor de este mismo frame.
-    if (_ready && !isGameOver && !isGameWon) {
+    if (_ready && !isFrozen) {
       _updateMagnet();
     }
+
+    // Animación de muerte: al cumplirse los 3 s se reinicia la ronda o termina
+    // la partida.
+    if (isDying) {
+      deathElapsed += dt;
+      if (deathElapsed >= deathBlinkSeconds) _finishDeath();
+    }
+    // Cuenta regresiva: mientras corre, todo está congelado.
+    if (countdownLeft > 0) {
+      countdownLeft = max(0.0, countdownLeft - dt);
+    }
+
     // Actualiza a todos los componentes hijos (jugador, fantasmas, láser...).
     super.update(dt);
-    if (!isGameOver && !isGameWon) {
+    if (!isFrozen) {
       // El reloj de modos (Scatter/Chase/Frightened) solo corre mientras se juega.
       modeController.update(dt);
     }
@@ -1154,11 +1850,16 @@ class PacManGame extends FlameGame with KeyboardEvents {
     score = 0;
     isGameOver = false;
     isGameWon = false;
+    // Partida nueva desde cero: vidas completas y cuenta regresiva.
+    lives = maxLives;
+    isDying = false;
+    deathElapsed = 0.0;
+    countdownLeft = countdownSeconds;
     modeController.reset();
     // expand() aplana la matriz en una sola lista; se cuentan los pasillos con
     // punto (0) y los power-ups (3).
-    totalDots = mazeGrid.expand((r) => r).where((c) => c == 0 || c == 3).length;
-    dotsRemaining = totalDots;
+    totalRimoras = mazeGrid.expand((r) => r).where((c) => c == 0 || c == 3).length;
+    rimorasRemaining = totalRimoras;
     ghosts.clear();
     solidWalls.clear();
     tempWalls.clear();
@@ -1179,17 +1880,22 @@ class PacManGame extends FlameGame with KeyboardEvents {
         .where((c) =>
             c is PlayerPacman ||
             c is Ghost ||
-            c is Dot ||
+            c is Rimora ||
             c is Wall ||
             c is TempWall ||
-            c is LaserLink ||
-            c is ProgressBar)
+            c is LaserLink)
         .toList()
         .forEach((c) => c.removeFromParent());
 
     // Reconstruye muros y puntos a partir de mazeGrid.
     _buildGridMaze();
 
+    // Jugador, fantasmas y láser en sus posiciones iniciales.
+    _spawnEntities();
+  }
+
+  /// Crea al jugador, a los cuatro fantasmas y el láser en su posición inicial.
+  void _spawnEntities() {
     // Casilla inicial del jugador: columna 13, fila 12 (parte baja, centrada).
     player = PlayerPacman(Vector2(13, 12));
     add(player);
@@ -1197,21 +1903,62 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
     // Cada fantasma tiene su personalidad y sale de la base en un momento
     // distinto (releaseDelay, en segundos).
-    add(Ghost(Vector2(13, 7), GhostType.blinky, releaseDelay: 0));
-    add(Ghost(Vector2(14, 7), GhostType.pinky, releaseDelay: 2));
-    add(Ghost(Vector2(13, 8), GhostType.inky, releaseDelay: 6));
-    add(Ghost(Vector2(14, 8), GhostType.clyde, releaseDelay: 10));
+    add(Ghost(Vector2(13, 7), GhostType.shardox, releaseDelay: 0));
+    add(Ghost(Vector2(14, 7), GhostType.vespakron, releaseDelay: 2));
+    add(Ghost(Vector2(13, 8), GhostType.kyros, releaseDelay: 6));
+    add(Ghost(Vector2(14, 8), GhostType.pyros, releaseDelay: 10));
 
-    // Láser que une a Inky (3) y Clyde (4).
+    // Láser que une a Kyros y Pyros.
     add(LaserLink());
+  }
 
-    // Barra de progreso del nivel.
-    add(ProgressBar());
+  /// Quita al jugador, los fantasmas, el láser y las paredes temporales, y
+  /// limpia sus registros. NO toca los puntos, la puntuación ni las vidas.
+  void _removeEntities() {
+    children
+        .where((c) =>
+            c is PlayerPacman ||
+            c is Ghost ||
+            c is TempWall ||
+            c is LaserLink)
+        .toList()
+        .forEach((c) => c.removeFromParent());
+    ghosts.clear();
+    solidWalls.clear();
+    tempWalls.clear();
+    pacTrail.clear();
+    magnetStrength = 0.0;
+    _ghostCombo = 0;
+    modeController.reset();
+  }
+
+  /// El jugador fue atrapado (por un fantasma o por el láser): pierde una vida
+  /// y empieza la animación de parpadeo de [deathBlinkSeconds].
+  void playerDied({String? cause}) {
+    if (isDying || isGameOver || isGameWon || isCountingDown) return;
+    lives = max(0, lives - 1);
+    isDying = true;
+    deathElapsed = 0.0;
+    deathCause = cause;
+  }
+
+  /// Termina la animación de muerte. Sin vidas: Game Over. Con vidas: se
+  /// reubican los personajes (los puntos y la puntuación se conservan) y
+  /// arranca la cuenta regresiva.
+  void _finishDeath() {
+    isDying = false;
+    if (lives <= 0) {
+      triggerGameOver(cause: deathCause);
+      return;
+    }
+    _removeEntities();
+    _spawnEntities();
+    countdownLeft = countdownSeconds;
   }
 
   /// Suma [points] a la puntuación, actualiza el récord y verifica la victoria.
   ///
-  /// La partida se gana cuando ya no queda ningún [Dot] en el laberinto.
+  /// La partida se gana cuando ya no queda ningún [Rimora] en el laberinto.
   void addScore(int points) {
     score += points;
     scoreText.text = 'SCORE: $score';
@@ -1223,8 +1970,8 @@ class PacManGame extends FlameGame with KeyboardEvents {
       highScoreText.text = 'HIGH SCORE: $highScore';
     }
 
-    // dotsRemaining lo decrementa el jugador al comer; al llegar a 0 se gana.
-    if (dotsRemaining <= 0) {
+    // rimorasRemaining lo decrementa el jugador al comer; al llegar a 0 se gana.
+    if (rimorasRemaining <= 0) {
       triggerGameWin();
     }
   }
@@ -1245,9 +1992,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
         if (cell == 1) {
           add(Wall(pos, Vector2(tileSize, tileSize)));
         } else if (cell == 0) {
-          add(Dot(Vector2(col.toDouble(), row.toDouble()), isPowerUp: false));
+          add(Rimora(Vector2(col.toDouble(), row.toDouble()), isMydra: false));
         } else if (cell == 3) {
-          add(Dot(Vector2(col.toDouble(), row.toDouble()), isPowerUp: true));
+          add(Rimora(Vector2(col.toDouble(), row.toDouble()), isMydra: true));
         }
       }
     }
@@ -1352,6 +2099,8 @@ class PacManGame extends FlameGame with KeyboardEvents {
     }
     // En pausa se "consumen" las teclas para que no muevan al jugador.
     if (paused) return KeyEventResult.handled;
+    // Mientras Pac-Man parpadea no se aceptan direcciones.
+    if (isDying) return KeyEventResult.handled;
 
     // KeyRepeatEvent: al mantener una tecla pulsada se sigue registrando la
     // dirección.
@@ -1489,7 +2238,7 @@ class ResultCard extends StatelessWidget {
                 gradient: const LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Color(0xFF0E0E3A), Color(0xFF050514)],
+                  colors: [Color(0xFF2A0F5C), Color(0xFF07051A)],
                 ),
                 border: Border.all(color: accent, width: 3 * s),
                 boxShadow: [
@@ -1643,7 +2392,7 @@ class GameWinOverlay extends StatelessWidget {
         (s) => _StatChip('PUNTUACIÓN', '${game.score}', Colors.white, s),
         (s) => _StatChip('RÉCORD', '${game.highScore}', _neonLime, s),
       ],
-      subtitle: '¡Comiste todos los puntos!',
+      subtitle: '¡Comiste todas las rimoras y mydras!',
       actions: [
         (s) => _NeonButton(
             label: 'JUGAR DE NUEVO', s: s, onPressed: () => game.startGame()),
@@ -1716,7 +2465,7 @@ class _PauseOverlayState extends State<PauseOverlay> {
                   gradient: const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Color(0xFF0E0E3A), Color(0xFF050514)],
+                    colors: [Color(0xFF2A0F5C), Color(0xFF07051A)],
                   ),
                   border: Border.all(color: _neonLime, width: 3 * s),
                   boxShadow: [
@@ -1785,7 +2534,7 @@ class _PauseOverlayState extends State<PauseOverlay> {
 
 /// Dibuja una etiqueta de texto centrada justo encima de una entidad.
 ///
-/// Usa un contorno negro para que se lea sobre los muros azules y el fondo.
+/// Usa un contorno negro para que se lea sobre los muros y el fondo.
 /// Debe llamarse dentro de `render`, con el origen en la esquina superior
 /// izquierda de la entidad.
 void drawEntityLabel(
@@ -1846,7 +2595,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
   /// Dirección solicitada por el jugador, pendiente de aplicarse.
   Vector2 nextDir = Vector2.zero();
 
-  /// Última dirección en la que se movió (la usan Pinky e Inky para apuntar).
+  /// Última dirección en la que se movió (la usan Vespakron e Kyros para apuntar).
   /// Se conserva aunque Pac-Man esté detenido.
   Vector2 facing = Vector2(-1, 0);
 
@@ -1855,7 +2604,8 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Velocidad actual en casillas por segundo.
   ///
-  /// Sube durante el modo Frightened y se reduce al 50 % dentro de los túneles.
+  /// Sube durante el modo Frightened. En los túneles se aplica
+  /// [GameSpeeds.tunnelFactor], que ahora vale 1.0 (velocidad normal).
   double get speed {
     final percent = game.modeController.isFrightened
         ? GameSpeeds.pacmanFrightened
@@ -1865,10 +2615,10 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
       tiles *= GameSpeeds.tunnelFactor;
     }
 
-    // Fantasma Imán: Blinky acelera a Pac-Man si avanza hacia él y lo frena
+    // Fantasma Imán: Shardox acelera a Pac-Man si avanza hacia él y lo frena
     // si se aleja. Moverse de lado (perpendicular) no cambia la velocidad.
     if (game.magnetStrength > 0 && moveDir != Vector2.zero()) {
-      final pull = moveDir.dot(game.magnetDir); // +1 hacia Blinky, -1 alejándose
+      final pull = moveDir.dot(game.magnetDir); // +1 hacia Shardox, -1 alejándose
       tiles *= 1.0 + AbilityConfig.magnetMaxPull * game.magnetStrength * pull;
     }
     return tiles;
@@ -1884,10 +2634,10 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
     try {
       // fromCache lanza una excepción si la imagen no se cargó. Se ignora a
       // propósito: el jugador se dibujará con la figura de respaldo.
-      sprite = Sprite(game.images.fromCache('pacman.png'));
+      sprite = Sprite(game.images.fromCache('vance.png'));
     } catch (_) {}
-    // El sprite mide 16 px dentro de una casilla de 24 px (4 px de margen por
-    // lado).
+    // El sprite mide 20 px dentro de una casilla de 24 px (2 px de margen por
+    // lado, más el +4 de updatePixelPosition que lo deja casi centrado).
     size = Vector2(20, 20);
     updatePixelPosition();
   }
@@ -1895,7 +2645,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
   /// Convierte la posición de cuadrícula a píxeles y la aplica al componente.
   void updatePixelPosition() {
     position = Vector2(
-      // El +4 centra el sprite de 16 px dentro de la casilla de 24 px.
+      // El +4 centra el sprite dentro de la casilla de 24 px.
       game.mazeOffsetX + gridPos.x * game.tileSize + 4,
       24 + gridPos.y * game.tileSize + 4,
     );
@@ -1906,9 +2656,12 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
     nextDir = newDir.clone();
   }
 
-  /// Dibuja el sprite (o un círculo amarillo) y la etiqueta "JUGADOR" encima.
+  /// Dibuja el sprite (o un círculo amarillo) y el nombre del jugador encima.
   @override
   void render(Canvas canvas) {
+    // Al perder una vida parpadea (8 cambios por segundo) durante 3 s.
+    if (game.isDying && (game.deathElapsed * 8).floor().isOdd) return;
+
     if (sprite != null) {
       sprite!.render(canvas, size: size);
     } else {
@@ -1918,7 +2671,14 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
         Paint()..color = Colors.yellow,
       );
     }
-    drawEntityLabel(canvas, 'JUGADOR', size, Colors.yellow, fontSize: 7);
+    // Etiqueta con el nombre que escribió el jugador.
+    drawEntityLabel(
+      canvas,
+      playerName.isEmpty ? 'JUGADOR' : playerName.toUpperCase(),
+      size,
+      Colors.yellow,
+      fontSize: 7,
+    );
   }
 
   /// Lógica de cada frame: decide la dirección, avanza y recoge puntos.
@@ -1926,7 +2686,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
   void update(double dt) {
     super.update(dt);
     // Con la partida terminada, el jugador queda congelado.
-    if (game.isGameOver || game.isGameWon) return;
+    if (game.isFrozen) return;
 
     // Solo se decide una nueva dirección cuando está exactamente en una casilla.
     if (moveProgress == 0.0) {
@@ -1994,22 +2754,22 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
       }
     }
 
-    // "facing" conserva la última dirección aunque el jugador se detenga; Pinky e
-    // Inky la usan para anticiparse.
+    // "facing" conserva la última dirección aunque el jugador se detenga; Vespakron e
+    // Kyros la usan para anticiparse.
     if (moveDir != Vector2.zero()) facing = moveDir.clone();
 
-    // Recolección de puntos: normal = 10 pts, power-up = 100 pts + pánico.
-    // toList() crea una copia: permite eliminar puntos del árbol mientras se
-    // recorre la lista.
-    game.children.whereType<Dot>().toList().forEach((dot) {
-      // "eaten" evita contar dos veces el mismo punto.
-      if (!dot.eaten && dot.gridPos == gridPos) {
-        dot.eaten = true;
-        dot.removeFromParent();
-        game.dotsRemaining--;
-        game.addScore(dot.isPowerUp ? 100 : 10);
-        if (dot.isPowerUp) {
-          game.onPowerUpEaten(); // Asusta a todos los fantasmas a la vez
+    // Recolección: rimora = 10 pts, mydra = 100 pts + pánico en los fantasmas.
+    // toList() crea una copia: permite eliminar componentes del árbol mientras
+    // se recorre la lista.
+    game.children.whereType<Rimora>().toList().forEach((rimora) {
+      // "eaten" evita contar dos veces la misma rimora.
+      if (!rimora.eaten && rimora.gridPos == gridPos) {
+        rimora.eaten = true;
+        rimora.removeFromParent();
+        game.rimorasRemaining--;
+        game.addScore(rimora.isMydra ? 100 : 10);
+        if (rimora.isMydra) {
+          game.onMydraEaten(); // Asusta a todos los fantasmas a la vez
         }
       }
     });
@@ -2017,55 +2777,54 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
 }
 
 // -----------------------------------------------------------------------------
-// DOT: PUNTO Y POWER-UP
+// RIMORA Y MYDRA: PUNTOS COLECCIONABLES
 // -----------------------------------------------------------------------------
 
-/// Punto coleccionable del laberinto.
-///
-/// Hay dos tipos, cada uno con su propia imagen:
-/// - Punto normal (`dot.png`): mide [dotSize] y otorga 10 puntos.
-/// - Power-up (`power.png`): mide [powerSize] (casi toda la casilla, para que
-///   su imagen se distinga bien), otorga 100 puntos y asusta a los fantasmas.
-///   Si `power.png` no existe, usa `dot.png`.
-class Dot extends PositionComponent with HasGameReference<PacManGame> {
-  /// Sprite del punto (`dot.png` o `power.png`). Si es nulo se dibuja un
-  /// círculo blanco.
+/// Coleccionable del laberinto. Hay dos tipos, cada uno con su propia imagen:
+/// - **Rimora** (`rimora.png`): el punto normal. Mide [rimoraSize] y otorga 10
+///   puntos.
+/// - **Mydra** (`mydra.png`): el punto grande (power-up). Mide [mydraSize]
+///   (casi toda la casilla, para que su imagen se distinga bien), otorga 100
+///   puntos y asusta a los fantasmas. Si `mydra.png` no existe, usa `rimora.png`.
+class Rimora extends PositionComponent with HasGameReference<PacManGame> {
+  /// Sprite de la rimora (`rimora.png`) o de la mydra (`mydra.png`). Si es nulo se
+  /// dibuja un círculo blanco.
   Sprite? sprite;
 
   /// Posición en coordenadas de la cuadrícula (columna, fila).
   Vector2 gridPos;
 
-  /// Indica si es un punto grande (power-up).
-  bool isPowerUp;
+  /// Indica si es una mydra (punto grande / power-up).
+  bool isMydra;
 
-  /// Marca el punto como ya comido (evita contarlo dos veces).
+  /// Marca la rimora o mydra como ya comida (evita contarla dos veces).
   bool eaten = false;
 
-  /// Tamaño (px) de un punto normal. Se ve en una casilla de 24 px.
-  static const double dotSize = 12.0;
+  /// Tamaño (px) de una rimora. Se ve en una casilla de 24 px.
+  static const double rimoraSize = 12.0;
 
-  /// Tamaño (px) de un power-up. La casilla mide 24 px, así que 20 px lo deja
+  /// Tamaño (px) de una mydra. La casilla mide 24 px, así que 20 px la deja
   /// casi a ancho completo con 2 px de margen por lado. No conviene pasar de
   /// 24, porque invadiría las casillas vecinas.
-  static const double powerSize = 20.0;
+  static const double mydraSize = 20.0;
 
-  Dot(this.gridPos, {this.isPowerUp = false});
+  Rimora(this.gridPos, {this.isMydra = false});
 
-  /// Carga el sprite y calcula tamaño y posición. Los power-ups miden el doble.
+  /// Carga el sprite y calcula tamaño y posición. Las mydras son más grandes.
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    // Cada tipo de punto tiene su imagen. Si power.png no existe, el power-up
-    // usa dot.png (ya agrandado) para no quedar invisible. fromCache lanza una
+    // Cada tipo tiene su imagen. Si mydra.png no existe, la mydra usa rimora.png
+    // (ya agrandada) para no quedar invisible. fromCache lanza una
     // excepción si la imagen no se cargó; se ignora y se prueba la siguiente.
-    final candidates = isPowerUp ? ['power.png', 'dot.png'] : ['dot.png'];
+    final candidates = isMydra ? ['mydra.png', 'rimora.png'] : ['rimora.png'];
     for (final name in candidates) {
       try {
         sprite = Sprite(game.images.fromCache(name));
         break;
       } catch (_) {}
     }
-    size = Vector2.all(isPowerUp ? powerSize : dotSize);
+    size = Vector2.all(isMydra ? mydraSize : rimoraSize);
     // Se centra el punto dentro de su casilla.
     position = Vector2(
       game.mazeOffsetX + gridPos.x * game.tileSize + (game.tileSize - size.x) / 2,
@@ -2073,7 +2832,7 @@ class Dot extends PositionComponent with HasGameReference<PacManGame> {
     );
   }
 
-  /// Dibuja el punto (círculo blanco si falta la imagen).
+  /// Dibuja la rimora o mydra (círculo blanco si falta la imagen).
   @override
   void render(Canvas canvas) {
     if (sprite != null) {
@@ -2089,70 +2848,405 @@ class Dot extends PositionComponent with HasGameReference<PacManGame> {
 }
 
 // -----------------------------------------------------------------------------
-// PROGRESSBAR: BARRA DE PROGRESO DEL NIVEL
+// LIVESDISPLAY: CORAZONES DE CRISTAL
 // -----------------------------------------------------------------------------
 
-/// Barra de progreso del nivel, debajo del laberinto.
+/// Una faceta (triángulo) del corazón de cristal.
+class _Facet {
+  _Facet(this.a, this.b, this.c) : centroid = (a + b + c) / 3.0;
+
+  final Offset a;
+  final Offset b;
+  final Offset c;
+
+  /// Centro del triángulo: sirve para sombrearlo y para dispersarlo al romperse.
+  final Offset centroid;
+
+  /// Contorno del triángulo.
+  late final Path path = Path()
+    ..moveTo(a.dx, a.dy)
+    ..lineTo(b.dx, b.dy)
+    ..lineTo(c.dx, c.dy)
+    ..close();
+}
+
+/// Geometría de un corazón de cristal tallado: el contorno de un corazón
+/// dividido en facetas triangulares que salen de un punto central, cada una
+/// con su propio tono según hacia dónde "mira" (luz desde arriba a la
+/// izquierda). Se calcula una sola vez y se reutiliza en los 3 corazones.
+class _CrystalHeart {
+  _CrystalHeart(double s) {
+    const segs = 6; // Segmentos por mitad del corazón.
+    final tip = Offset(0, s * 0.5); // Punta inferior.
+    final dip = Offset(0, -s * 0.15); // Hendidura superior.
+
+    // Contorno: lado izquierdo (punta -> hendidura) y derecho (hendidura ->
+    // punta), muestreando dos curvas de Bézier.
+    final pts = <Offset>[];
+    for (int i = 0; i <= segs; i++) {
+      pts.add(_cubic(tip, Offset(-s * 0.75, -s * 0.05),
+          Offset(-s * 0.45, -s * 0.6), dip, i / segs));
+    }
+    for (int i = 1; i <= segs; i++) {
+      pts.add(_cubic(dip, Offset(s * 0.45, -s * 0.6),
+          Offset(s * 0.75, -s * 0.05), tip, i / segs));
+    }
+    // El último punto coincide con el primero (la punta), por eso se omite al
+    // cerrar el polígono.
+    outline = Path()..addPolygon(pts.sublist(0, pts.length - 1), true);
+
+    final center = Offset(0, s * 0.05);
+    for (int i = 0; i < pts.length - 1; i++) {
+      final f = _Facet(center, pts[i], pts[i + 1]);
+      facets.add(f);
+      // Brillo (0 a 1): alto si la faceta mira hacia la luz (arriba-izquierda).
+      final dir = f.centroid - center;
+      final len = dir.distance;
+      final n = len == 0 ? const Offset(0, -1) : dir / len;
+      var b = 0.5 + 0.5 * (n.dx * -0.707 + n.dy * -0.707);
+      b += i.isEven ? 0.07 : -0.07; // Variación para que parezca tallado.
+      shade.add(b.clamp(0.0, 1.0).toDouble());
+    }
+  }
+
+  /// Silueta completa del corazón (para brillo, recorte y contorno).
+  late final Path outline;
+
+  /// Facetas triangulares.
+  final List<_Facet> facets = [];
+
+  /// Brillo de cada faceta (0 = oscura, 1 = clara).
+  final List<double> shade = [];
+
+  static const Color _violet = Color(0xFF7A2CF0);
+  static const Color _pink = Color(0xFFFF4DA6);
+  static const Color _ice = Color(0xFFFFE6F7);
+
+  /// Color de la faceta [i]: de violeta (sombra) a rosa y casi blanco (luz).
+  Color colorOf(int i) {
+    final b = shade[i];
+    return b < 0.5
+        ? Color.lerp(_violet, _pink, b / 0.5)!
+        : Color.lerp(_pink, _ice, (b - 0.5) / 0.5)!;
+  }
+
+  /// Punto de una curva de Bézier cúbica en el instante [t] (0 a 1).
+  static Offset _cubic(Offset p0, Offset p1, Offset p2, Offset p3, double t) {
+    final u = 1 - t;
+    return p0 * (u * u * u) +
+        p1 * (3 * u * u * t) +
+        p2 * (3 * u * t * t) +
+        p3 * (t * t * t);
+  }
+}
+
+/// Muestra las vidas como corazones de cristal apilados de arriba hacia abajo
+/// en la columna derecha, fuera del laberinto (x = 774 a 900 del lienzo
+/// virtual).
 ///
-/// Se llena conforme Pac-Man se come los puntos y pasa de amarillo a verde.
-/// Al llegar al 100 % se dispara la victoria.
-class ProgressBar extends PositionComponent with HasGameReference<PacManGame> {
-  /// Prioridad 40: se dibuja por encima del laberinto y por debajo del láser (50).
-  ProgressBar() {
-    priority = 40;
+/// Animaciones (todas suaves, sin parpadeos):
+/// - Corazón lleno: late levemente, un destello de luz lo recorre de vez en
+///   cuando y una chispa en el lóbulo izquierdo brilla y se atenúa.
+/// - Vida perdida: el cristal se rompe en facetas que salen disparadas, giran
+///   y se desvanecen; queda el contorno vacío.
+/// - Partida nueva: los corazones reaparecen uno tras otro con rebote.
+class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
+  LivesDisplay() {
+    priority = 45;
+  }
+
+  /// Centro horizontal de la columna derecha (entre 774 y 900).
+  static const double _cx = 837.0;
+  /// Altura del centro del primer corazón.
+  static const double _firstY = 62.0;
+  /// Separación vertical entre corazones.
+  static const double _gap = 44.0;
+  /// Tamaño del corazón (px).
+  static const double _heartSize = 30.0;
+  /// Duración de la animación de rotura (s).
+  static const double _loseSeconds = 0.9;
+  /// Duración de la animación de aparición (s).
+  static const double _popSeconds = 0.5;
+
+  /// Geometría compartida del corazón de cristal.
+  static final _CrystalHeart _crystal = _CrystalHeart(_heartSize);
+
+  /// Estado anterior de cada corazón (lleno / vacío), para detectar cambios.
+  final List<bool> _full = List.filled(PacManGame.maxLives, true);
+  /// Segundos desde el último cambio de cada corazón (99 = sin animación).
+  final List<double> _t = List.filled(PacManGame.maxLives, 99.0);
+  /// Reloj general que mueve latido, destello y chispa.
+  double _clock = 0.0;
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    _clock += dt;
+    for (int i = 0; i < _full.length; i++) {
+      final full = i < game.lives; // El de más abajo se pierde primero.
+      if (full != _full[i]) {
+        _full[i] = full;
+        _t[i] = 0.0; // Arranca la animación de rotura o de aparición.
+      } else {
+        _t[i] += dt;
+      }
+    }
+  }
+
+  /// Dibuja un corazón de cristal completo.
+  ///
+  /// [alpha]: opacidad (0 a 1). [sweep]: avance (0 a 1) del destello de luz, o
+  /// negativo si no hay destello. [twinkle]: intensidad (0 a 1) de la chispa.
+  void _drawCrystal(Canvas canvas, double scale, double alpha, double sweep,
+      double twinkle) {
+    final a255 = (alpha * 255).round();
+    canvas.save();
+    canvas.scale(scale);
+
+    // Resplandor rosa detrás del cristal.
+    canvas.drawPath(
+      _crystal.outline,
+      Paint()
+        ..color = Colors.pinkAccent.withAlpha((a255 * 0.55).round())
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+    );
+
+    // Facetas (cristal semitransparente).
+    for (int i = 0; i < _crystal.facets.length; i++) {
+      canvas.drawPath(
+        _crystal.facets[i].path,
+        Paint()..color = _crystal.colorOf(i).withAlpha((a255 * 0.85).round()),
+      );
+    }
+    // Aristas internas.
+    final edge = Paint()
+      ..color = Colors.white.withAlpha((a255 * 0.28).round())
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8;
+    for (final f in _crystal.facets) {
+      canvas.drawPath(f.path, edge);
+    }
+    // Borde exterior.
+    canvas.drawPath(
+      _crystal.outline,
+      Paint()
+        ..color = Colors.white.withAlpha((a255 * 0.85).round())
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    // Destello de luz que cruza el cristal en diagonal.
+    if (sweep >= 0 && alpha > 0.99) {
+      canvas.save();
+      canvas.clipPath(_crystal.outline);
+      canvas.rotate(0.5);
+      final x = -_heartSize * 0.9 + sweep * _heartSize * 1.8;
+      canvas.drawRect(
+        Rect.fromLTWH(x, -_heartSize, _heartSize * 0.22, _heartSize * 2),
+        Paint()..color = Colors.white.withAlpha(110),
+      );
+      canvas.restore();
+    }
+
+    // Chispa (estrella de cuatro puntas) en el lóbulo izquierdo.
+    final glint = Paint()
+      ..color = Colors.white.withAlpha((a255 * (0.35 + 0.65 * twinkle)).round())
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final gc = Offset(-_heartSize * 0.22, -_heartSize * 0.2);
+    final len = 2.5 + 3.0 * twinkle;
+    canvas.drawLine(gc + Offset(-len, 0), gc + Offset(len, 0), glint);
+    canvas.drawLine(gc + Offset(0, -len), gc + Offset(0, len), glint);
+
+    canvas.restore();
+  }
+
+  /// Rotura del cristal: un destello inicial y luego cada faceta sale
+  /// disparada desde el centro, gira y se desvanece. [p] va de 0 a 1.
+  void _drawShatter(Canvas canvas, double p) {
+    final alpha = (1 - p).clamp(0.0, 1.0).toDouble();
+    final a255 = (alpha * 255).round();
+    final ease = Curves.easeOut.transform(p);
+
+    // Destello blanco del impacto (primer 12 % de la animación).
+    if (p < 0.12) {
+      canvas.drawPath(
+        _crystal.outline,
+        Paint()..color = Colors.white.withAlpha(((1 - p / 0.12) * 200).round()),
+      );
+    }
+
+    for (int i = 0; i < _crystal.facets.length; i++) {
+      final f = _crystal.facets[i];
+      final len = f.centroid.distance;
+      final unit = len == 0 ? const Offset(0, -1) : f.centroid / len;
+      final offset = unit * (26 * ease);
+
+      canvas.save();
+      // Sale hacia afuera y cae un poco, como un fragmento de vidrio.
+      canvas.translate(offset.dx, offset.dy + 12 * p * p);
+      canvas.translate(f.centroid.dx, f.centroid.dy);
+      canvas.rotate((i.isEven ? 1 : -1) * 2.2 * p);
+      canvas.translate(-f.centroid.dx, -f.centroid.dy);
+      canvas.drawPath(
+        f.path,
+        Paint()..color = _crystal.colorOf(i).withAlpha((a255 * 0.85).round()),
+      );
+      canvas.drawPath(
+        f.path,
+        Paint()
+          ..color = Colors.white.withAlpha((a255 * 0.8).round())
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+      canvas.restore();
+    }
   }
 
   @override
   void render(Canvas canvas) {
-    final total = game.totalDots;
-    // Fracción completada (0.0 a 1.0). Se protege el caso total == 0 para no
-    // dividir entre cero.
-    final progress = total == 0
-        ? 0.0
-        : ((total - game.dotsRemaining) / total).clamp(0.0, 1.0).toDouble();
-
-    final x = game.mazeOffsetX;
-    // 414 = justo debajo del laberinto (24 + 16 x 24 = 408) más un pequeño margen.
-    const y = 414.0;
-    final width = game.maxCols * game.tileSize; // Mismo ancho que el laberinto
-    const height = 12.0;
-
-    // Fondo (riel) de la barra con esquinas redondeadas.
-    final bg = RRect.fromRectAndRadius(
-        Rect.fromLTWH(x, y, width, height), const Radius.circular(6));
-    canvas.drawRRect(bg, Paint()..color = const Color(0xFF222222));
-
-    // Relleno: su ancho es proporcional al progreso y su color pasa de amarillo
-    // a verde mientras se llena.
-    if (progress > 0) {
-      final fill = RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, y, width * progress, height),
-          const Radius.circular(6));
-      canvas.drawRRect(
-        fill,
-        Paint()..color = Color.lerp(Colors.yellow, Colors.greenAccent, progress)!,
-      );
-    }
-
-    canvas.drawRRect(
-      bg,
-      Paint()
-        ..color = Colors.white54
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
-    );
-
-    // Texto con el porcentaje, centrado sobre la barra.
     TextPaint(
       style: const TextStyle(
-        color: Colors.white,
-        fontSize: 9,
-        fontWeight: FontWeight.bold,
+        color: Colors.pinkAccent,
+        fontSize: 11,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 1.5,
+      ),
+    ).render(canvas, 'VIDAS', Vector2(_cx, 30), anchor: Anchor.topCenter);
+
+    for (int i = 0; i < _full.length; i++) {
+      canvas.save();
+      canvas.translate(_cx, _firstY + i * _gap);
+
+      // Hueco vacío (siempre visible debajo).
+      canvas.drawPath(
+        _crystal.outline,
+        Paint()
+          ..color = Colors.white24
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..strokeJoin = StrokeJoin.round,
+      );
+
+      if (_full[i]) {
+        // Aparición escalonada (0.12 s entre corazones) y luego latido suave.
+        final tt = _t[i] - i * 0.12;
+        if (tt >= 0) {
+          final scale = tt < _popSeconds
+              ? Curves.easeOutBack.transform(tt / _popSeconds)
+              : 1.0 + 0.05 * sin(_clock * 4 - i * 0.8);
+          // El destello recorre el cristal durante el 30 % de un ciclo de ~3 s,
+          // desfasado en cada corazón.
+          final phase = (_clock * 0.35 + i * 0.3) % 1.0;
+          final sweep = phase < 0.3 ? phase / 0.3 : -1.0;
+          final twinkle = 0.5 + 0.5 * sin(_clock * 3 + i * 1.7);
+          _drawCrystal(canvas, scale, 1.0, sweep, twinkle);
+        }
+      } else if (_t[i] < _loseSeconds) {
+        _drawShatter(canvas, _t[i] / _loseSeconds);
+      }
+      canvas.restore();
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// COUNTDOWNOVERLAY: CUENTA REGRESIVA 3-2-1-0
+// -----------------------------------------------------------------------------
+
+/// Cuenta regresiva de [PacManGame.countdownSeconds] segundos (3, 2, 1, 0) que
+/// aparece al empezar una partida o al reanudarla tras perder una vida.
+///
+/// Cada número entra con un rebote desde más grande, brilla con su propio
+/// color, lanza un anillo que se expande y se desvanece al final. Mientras se
+/// muestra, el juego permanece congelado. Solo dibuja; el tiempo lo lleva
+/// [PacManGame.countdownLeft].
+class CountdownOverlay extends PositionComponent
+    with HasGameReference<PacManGame> {
+  CountdownOverlay() {
+    priority = 100; // Por encima de todo lo demás.
+  }
+
+  /// Cada número (3, 2, 1, 0) dura la cuarta parte de la cuenta.
+  static const double _stepSeconds = PacManGame.countdownSeconds / 4;
+
+  /// Color de cada paso (3, 2, 1, 0).
+  static const List<Color> _colors = [
+    Colors.cyanAccent,
+    Colors.pinkAccent,
+    Colors.yellowAccent,
+    _neonLime,
+  ];
+
+  @override
+  void render(Canvas canvas) {
+    final left = game.countdownLeft;
+    if (left <= 0) return;
+
+    final elapsed = PacManGame.countdownSeconds - left;
+    final step = min(3, (elapsed / _stepSeconds).floor()); // 0..3
+    final number = 3 - step;
+    // Progreso (0 a 1) dentro del número actual.
+    final p = ((elapsed - step * _stepSeconds) / _stepSeconds)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final color = _colors[step];
+
+    final mazeW = game.maxCols * game.tileSize;
+    final mazeH = game.mazeGrid.length * game.tileSize;
+    final cx = game.mazeOffsetX + mazeW / 2;
+    final cy = 24 + mazeH / 2;
+
+    // Velo oscuro sobre el laberinto para que el número destaque.
+    canvas.drawRect(
+      Rect.fromLTWH(game.mazeOffsetX, 24, mazeW, mazeH),
+      Paint()..color = Colors.black.withAlpha(120),
+    );
+
+    // Anillo de energía que se expande y se desvanece.
+    canvas.drawCircle(
+      Offset(cx, cy),
+      40 + 130 * Curves.easeOut.transform(p),
+      Paint()
+        ..color = color.withAlpha(((1 - p) * 200).round())
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1 + 6 * (1 - p),
+    );
+
+    // Número: entra con rebote (de 2x a 1x) y se desvanece en el último 25 %.
+    final enter = Curves.easeOutBack.transform((p / 0.4).clamp(0.0, 1.0));
+    final scale = 2.0 - enter;
+    final alpha = p < 0.75 ? 255 : ((1 - (p - 0.75) / 0.25) * 255).round();
+
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.scale(scale);
+    TextPaint(
+      style: TextStyle(
+        fontSize: 120,
+        fontWeight: FontWeight.w900,
+        color: color.withAlpha(alpha),
+        shadows: [
+          Shadow(color: color.withAlpha((alpha * 0.9).round()), blurRadius: 24),
+          Shadow(color: color.withAlpha((alpha * 0.6).round()), blurRadius: 48),
+        ],
+      ),
+    ).render(canvas, '$number', Vector2.zero(), anchor: Anchor.center);
+    canvas.restore();
+
+    // Mensaje inferior.
+    TextPaint(
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 4,
+        color: Colors.white.withAlpha(220),
       ),
     ).render(
       canvas,
-      'PROGRESO ${(progress * 100).round()}%',
-      Vector2(x + width / 2, y + height / 2),
+      step < 3 ? '¡PREPÁRATE!' : '¡A JUGAR!',
+      Vector2(cx, cy + 95),
       anchor: Anchor.center,
     );
   }
@@ -2166,14 +3260,14 @@ class ProgressBar extends PositionComponent with HasGameReference<PacManGame> {
 class AbilityConfig {
   AbilityConfig._();
 
-  // --- Fantasma Imán (Blinky) ---------------------------------------------
+  // --- Fantasma Imán (Shardox) ---------------------------------------------
   /// Radio de atracción, en casillas.
   static const double magnetRadiusTiles = 3.0;
 
   /// Variación máxima de la velocidad de Pac-Man (0.30 = +-30 %).
   static const double magnetMaxPull = 0.30;
 
-  // --- Fantasma Constructor (Pinky) ----------------------------------------
+  // --- Fantasma Constructor (Vespakron) ----------------------------------------
   /// Espera inicial antes de la primera pared (s).
   static const double builderFirstDelay = 6.0;
 
@@ -2196,7 +3290,7 @@ class AbilityConfig {
   /// garantizar que nunca quede encerrado.
   static const int builderMinReachable = 60;
 
-  // --- Láser Inky-Clyde -----------------------------------------------------
+  // --- Láser Kyros-Pyros -----------------------------------------------------
   /// Duración del láser activo (s).
   static const double laserActiveSeconds = 8.0;
 
@@ -2250,7 +3344,7 @@ Vector2 _centerOf(PositionComponent c) =>
 // FANTASMA CONSTRUCTOR: PARED TEMPORAL
 // -----------------------------------------------------------------------------
 
-/// Pared temporal colocada por Pinky.
+/// Pared temporal colocada por Vespakron.
 ///
 /// Ciclo de vida:
 /// 1. **Aviso** ([AbilityConfig.builderWarningSeconds]): contorno naranja
@@ -2291,7 +3385,7 @@ class TempWall extends PositionComponent with HasGameReference<PacManGame> {
   @override
   void update(double dt) {
     super.update(dt);
-    if (game.isGameOver || game.isGameWon) return;
+    if (game.isFrozen) return;
 
     if (!_solid) {
       // Fase 1: aviso. Todavía no bloquea el paso.
@@ -2365,7 +3459,7 @@ class TempWall extends PositionComponent with HasGameReference<PacManGame> {
 // ENLACE LÁSER INKY-CLYDE
 // -----------------------------------------------------------------------------
 
-/// Rayo láser que une permanentemente a Inky (3) y Clyde (4).
+/// Rayo láser que une permanentemente a Kyros y Pyros.
 ///
 /// Ciclo de [AbilityConfig.laserActiveSeconds] activo +
 /// [AbilityConfig.laserCooldownSeconds] de enfriamiento. Durante los últimos
@@ -2412,7 +3506,7 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   @override
   void update(double dt) {
     super.update(dt);
-    if (game.isGameOver || game.isGameWon) return;
+    if (game.isFrozen) return;
 
     // El ciclo se pausa mientras los fantasmas están asustados.
     if (!game.modeController.isFrightened) {
@@ -2422,12 +3516,12 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
     _pulse += dt;
 
     final pac = game.player.isMounted ? _centerOf(game.player) : null;
-    final inky = game.ghosts[GhostType.inky];
-    final clyde = game.ghosts[GhostType.clyde];
+    final kyros = game.ghosts[GhostType.kyros];
+    final pyros = game.ghosts[GhostType.pyros];
 
-    if (pac != null && _isActive && _operational(inky) && _operational(clyde)) {
-      final a = _centerOf(inky!);
-      final b = _centerOf(clyde!);
+    if (pac != null && _isActive && _operational(kyros) && _operational(pyros)) {
+      final a = _centerOf(kyros!);
+      final b = _centerOf(pyros!);
 
       // Caso 1: el jugador está (casi) sobre la línea en este frame.
       final onBeam =
@@ -2438,8 +3532,8 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
           _prevPac != null && _segmentsIntersect(_prevPac!, pac, a, b);
 
       if (onBeam || crossed) {
-        game.triggerGameOver(
-            cause: 'Te alcanzó el láser de Inky (3) y Clyde (4)');
+        game.playerDied(
+            cause: 'Te alcanzó el láser de Kyros y Pyros');
       }
     }
     // Se guarda la posición actual para compararla en el siguiente frame.
@@ -2451,12 +3545,12 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   void render(Canvas canvas) {
     _renderHud(canvas);
 
-    final inky = game.ghosts[GhostType.inky];
-    final clyde = game.ghosts[GhostType.clyde];
-    if (!_operational(inky) || !_operational(clyde)) return;
+    final kyros = game.ghosts[GhostType.kyros];
+    final pyros = game.ghosts[GhostType.pyros];
+    if (!_operational(kyros) || !_operational(pyros)) return;
 
-    final a = _centerOf(inky!);
-    final b = _centerOf(clyde!);
+    final a = _centerOf(kyros!);
+    final b = _centerOf(pyros!);
 
     if (_isActive) {
       // Valor que oscila entre 0 y 1 y modula la intensidad del halo rojo.
@@ -2504,18 +3598,18 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
     String text;
     Color color;
     if (game.modeController.isFrightened) {
-      text = 'LÁSER 3-4: EN PAUSA';
+      text = 'LÁSER: EN PAUSA';
       color = Colors.grey;
     } else if (_isActive) {
       final left = AbilityConfig.laserActiveSeconds - _t;
-      text = 'LÁSER 3-4: ACTIVO ${left.toStringAsFixed(1)}s';
+      text = 'LÁSER: ACTIVO ${left.toStringAsFixed(1)}s';
       color = Colors.redAccent;
     } else if (_isWarning) {
-      text = 'LÁSER 3-4: ¡CARGANDO!';
+      text = 'LÁSER: ¡CARGANDO!';
       color = Colors.orangeAccent;
     } else {
       final left = _cycle - _t;
-      text = 'LÁSER 3-4: LISTO EN ${left.toStringAsFixed(0)}s';
+      text = 'LÁSER: LISTO EN ${left.toStringAsFixed(0)}s';
       color = Colors.cyanAccent;
     }
 
@@ -2561,15 +3655,15 @@ class GameSpeeds {
   /// Fantasma asustado: cae drásticamente.
   static const double ghostFrightened = 0.40;
 
-  /// Blinky en Cruise Elroy 1 (igual de rápido que Pac-Man).
+  /// Shardox en Cruise Elroy 1 (igual de rápido que Pac-Man).
   static const double elroy1 = 0.80;
 
-  /// Blinky en Cruise Elroy 2 (más rápido que Pac-Man).
+  /// Shardox en Cruise Elroy 2 (más rápido que Pac-Man).
   static const double elroy2 = 0.88;
 
-  /// Multiplicador dentro de los túneles laterales (50 %), para Pac-Man y
-  /// para los fantasmas.
-  static const double tunnelFactor = 0.50;
+  /// Multiplicador dentro de los túneles laterales. 1.0 = velocidad normal
+  /// (sin cambio). Afecta igual a Pac-Man y a los fantasmas.
+  static const double tunnelFactor = 1.0;
 
   /// Cruise Elroy 1 se activa cuando queda este porcentaje de puntos.
   static const double elroy1DotsFraction = 0.15;
@@ -2581,7 +3675,7 @@ class GameSpeeds {
   static double tiles(double percent) => base * percent;
 }
 
-/// Si es `true`, Blinky en Cruise Elroy ignora el modo Scatter y sigue
+/// Si es `true`, Shardox en Cruise Elroy ignora el modo Scatter y sigue
 /// persiguiendo a Pac-Man, como en el original.
 const bool kElroyIgnoresScatter = true;
 
@@ -2681,13 +3775,13 @@ class GhostModeController {
 
 /// Los cuatro fantasmas, identificados por su personalidad clásica.
 ///
-/// - [blinky]: perseguidor directo.
-/// - [pinky]: emboscador.
-/// - [inky]: estratega (flanqueo).
-/// - [clyde]: tímido / errante.
-enum GhostType { blinky, pinky, inky, clyde }
+/// - [shardox]: perseguidor directo.
+/// - [vespakron]: emboscador.
+/// - [kyros]: estratega (flanqueo).
+/// - [pyros]: tímido / errante.
+enum GhostType { shardox, vespakron, kyros, pyros }
 
-/// Si es `true`, Pinky e Inky replican el error de desbordamiento del
+/// Si es `true`, Vespakron e Kyros replican el error de desbordamiento del
 /// Pac-Man original: cuando Pac-Man mira hacia arriba, el objetivo también se
 /// desplaza a la izquierda. Por defecto está desactivado.
 const bool kEmulateOriginalOverflowBug = false;
@@ -2698,7 +3792,7 @@ class GhostContext {
     required this.ghostTile,
     required this.pacTile,
     required this.pacDir,
-    required this.blinkyTile,
+    required this.shardoxTile,
   });
 
   /// Casilla del fantasma que calcula.
@@ -2710,8 +3804,8 @@ class GhostContext {
   /// Última dirección en la que se movió Pac-Man.
   final Vector2 pacDir;
 
-  /// Casilla de Blinky (la usa Inky para su vector de flanqueo).
-  final Vector2 blinkyTile;
+  /// Casilla de Shardox (la usa Kyros para su vector de flanqueo).
+  final Vector2 shardoxTile;
 }
 
 /// Casilla que está [tiles] casillas delante de [origin] en dirección [dir].
@@ -2732,8 +3826,17 @@ abstract class GhostPersonality {
   /// Color de respaldo si no hay sprite disponible.
   Color get color;
 
-  /// Sprite propio del fantasma. Si no existe, se usa `ghost.png`.
+  /// Nombre del personaje (galería del menú y mensajes de derrota).
+  String get displayName;
+
+  /// Descripción que se muestra en la galería de personajes del menú.
+  String get description;
+
+  /// Sprite normal del fantasma (archivo dentro de assets/images/).
   String get spriteAsset;
+
+  /// Sprite del fantasma asustado ("niga"), propio de cada personaje.
+  String get scaredSpriteAsset;
 
   /// Esquina a la que se dirige en modo Scatter (puede estar fuera del mapa,
   /// como en el original, para que rodee la esquina).
@@ -2745,27 +3848,41 @@ abstract class GhostPersonality {
   /// Devuelve la personalidad correspondiente a [type].
   static GhostPersonality of(GhostType type) {
     switch (type) {
-      case GhostType.blinky:
-        return const BlinkyPersonality();
-      case GhostType.pinky:
-        return const PinkyPersonality();
-      case GhostType.inky:
-        return const InkyPersonality();
-      case GhostType.clyde:
-        return const ClydePersonality();
+      case GhostType.shardox:
+        return const ShardoxPersonality();
+      case GhostType.vespakron:
+        return const VespakronPersonality();
+      case GhostType.kyros:
+        return const KyrosPersonality();
+      case GhostType.pyros:
+        return const PyrosPersonality();
     }
   }
 }
 
-/// Blinky: su objetivo es siempre la casilla actual de Pac-Man.
-class BlinkyPersonality extends GhostPersonality {
-  const BlinkyPersonality();
+/// Shardox: su objetivo es siempre la casilla actual de Pac-Man.
+class ShardoxPersonality extends GhostPersonality {
+  const ShardoxPersonality();
 
   @override
   Color get color => Colors.red;
 
   @override
-  String get spriteAsset => 'ghost.png';
+  String get displayName => 'Shardox';
+
+  @override
+  String get description =>
+      'Él es Shardox, uno de los 4 guardianes del laberinto de cristal. '
+      'Shardox siempre sabrá en todo momento dónde estás, así que no importa '
+      'del lado del mapa que estés, siempre estará siguiéndote. También tiene '
+      'la peculiaridad de atraerte hacia él cuando está cerca de ti. '
+      '(Es un robot de cristal)';
+
+  @override
+  String get spriteAsset => 'shardox.png';
+
+  @override
+  String get scaredSpriteAsset => 'shardoxniga.png';
 
   @override
   Vector2 get scatterTarget => Vector2(25, -2); // Arriba a la derecha
@@ -2774,15 +3891,29 @@ class BlinkyPersonality extends GhostPersonality {
   Vector2 chaseTarget(GhostContext c) => c.pacTile.clone();
 }
 
-/// Pinky: apunta 4 casillas por delante de la dirección de Pac-Man.
-class PinkyPersonality extends GhostPersonality {
-  const PinkyPersonality();
+/// Vespakron: apunta 4 casillas por delante de la dirección de Pac-Man.
+class VespakronPersonality extends GhostPersonality {
+  const VespakronPersonality();
 
   @override
   Color get color => Colors.pinkAccent;
 
   @override
-  String get spriteAsset => 'ghost_pinky.png';
+  String get displayName => 'Vespakron';
+
+  @override
+  String get description =>
+      'Él es Vespakron, el rey de las abejas y uno de los 4 guardianes del '
+      'laberinto de cristal. Este monstruo siempre intentará emboscarte '
+      'saliendo justo enfrente de tu camino durante el laberinto, y también '
+      'te sellará salidas con sus paredes de cera temporales que te impedirán '
+      'avanzar en ciertas zonas. (Es una abeja de cristal)';
+
+  @override
+  String get spriteAsset => 'vespakron.png';
+
+  @override
+  String get scaredSpriteAsset => 'vespakronniga.png';
 
   @override
   Vector2 get scatterTarget => Vector2(1, -2); // Arriba a la izquierda
@@ -2791,19 +3922,29 @@ class PinkyPersonality extends GhostPersonality {
   Vector2 chaseTarget(GhostContext c) => _tilesAhead(c.pacTile, c.pacDir, 4);
 }
 
-/// Inky: usa a Pac-Man y a Blinky para formar un vector de flanqueo.
+/// Kyros: usa a Pac-Man y a Shardox para formar un vector de flanqueo.
 ///
 /// 1. Toma el punto "pivote": 2 casillas por delante de Pac-Man.
-/// 2. Traza el vector desde Blinky hasta el pivote.
-/// 3. Duplica ese vector: el objetivo es `pivote + (pivote - blinky)`.
-class InkyPersonality extends GhostPersonality {
-  const InkyPersonality();
+/// 2. Traza el vector desde Shardox hasta el pivote.
+/// 3. Duplica ese vector: el objetivo es `pivote + (pivote - shardox)`.
+class KyrosPersonality extends GhostPersonality {
+  const KyrosPersonality();
 
   @override
   Color get color => Colors.cyanAccent;
 
   @override
-  String get spriteAsset => 'ghost_inky.png';
+  String get displayName => 'Kyros';
+
+  @override
+  String get description =>
+      'Él es Kyros, hermano de Pyros, y cumple la misma función.';
+
+  @override
+  String get spriteAsset => 'kyros.png';
+
+  @override
+  String get scaredSpriteAsset => 'kyrosniga.png';
 
   @override
   Vector2 get scatterTarget => Vector2(26, 17); // Abajo a la derecha
@@ -2812,29 +3953,43 @@ class InkyPersonality extends GhostPersonality {
   Vector2 chaseTarget(GhostContext c) {
     // Paso 1: punto pivote, 2 casillas por delante del jugador.
     final pivot = _tilesAhead(c.pacTile, c.pacDir, 2);
-    // Pasos 2 y 3: pivote + (pivote - Blinky) = 2 x pivote - Blinky, es decir, el
-    // punto simétrico de Blinky respecto al pivote.
-    return pivot * 2.0 - c.blinkyTile;
+    // Pasos 2 y 3: pivote + (pivote - Shardox) = 2 x pivote - Shardox, es decir, el
+    // punto simétrico de Shardox respecto al pivote.
+    return pivot * 2.0 - c.shardoxTile;
   }
 }
 
-/// Clyde: persigue a Pac-Man si está a más de 8 casillas; si está a 8 o
+/// Pyros: persigue a Pac-Man si está a más de 8 casillas; si está a 8 o
 /// menos, se retira hacia su esquina.
-class ClydePersonality extends GhostPersonality {
-  const ClydePersonality();
+class PyrosPersonality extends GhostPersonality {
+  const PyrosPersonality();
 
   @override
   Color get color => Colors.orange;
 
   @override
-  String get spriteAsset => 'ghost_clyde.png';
+  String get displayName => 'Pyros';
+
+  @override
+  String get description =>
+      'Pyros es un cristal mágico que ronda por los callejones del laberinto. '
+      'La peculiaridad de Pyros es que tiene un hermano con el cual ambos '
+      'pueden reflejar un láser que atraviesa paredes y daña a cualquier '
+      'intruso que no sea parte del laberinto de cristal, pero no daña nada '
+      'del laberinto.';
+
+  @override
+  String get spriteAsset => 'pyros.png';
+
+  @override
+  String get scaredSpriteAsset => 'pyrosniga.png';
 
   @override
   Vector2 get scatterTarget => Vector2(0, 17); // Abajo a la izquierda
 
   @override
   Vector2 chaseTarget(GhostContext c) {
-    // Distancia en casillas entre Clyde y el jugador.
+    // Distancia en casillas entre Pyros y el jugador.
     final distance = c.ghostTile.distanceTo(c.pacTile);
     // Lejos: persigue. Cerca: huye a su esquina (por eso es "tímido").
     return distance > 8 ? c.pacTile.clone() : scatterTarget;
@@ -2874,9 +4029,6 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   /// Estrategia de objetivo asociada a [type].
   final GhostPersonality personality;
 
-  /// Número visible del fantasma: 1 = Blinky, 2 = Pinky, 3 = Inky, 4 = Clyde.
-  int get number => type.index + 1;
-
   /// Posición actual en coordenadas de la cuadrícula (columna, fila).
   Vector2 gridPos;
 
@@ -2894,13 +4046,14 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Velocidad actual en casillas por segundo, según el estado:
   /// - Asustado: velocidad muy reducida.
-  /// - Blinky: sube con Cruise Elroy 1 y 2.
-  /// - Dentro de un túnel lateral: se reduce al 50 %.
+  /// - Shardox: sube con Cruise Elroy 1 y 2.
+  /// - Dentro de un túnel lateral: se aplica [GameSpeeds.tunnelFactor]
+  ///   (1.0 = sin cambio).
   double _currentSpeed() {
     double percent;
     if (isScared) {
       percent = GameSpeeds.ghostFrightened;
-    } else if (type == GhostType.blinky) {
+    } else if (type == GhostType.shardox) {
       switch (game.elroyLevel) {
         case 2:
           percent = GameSpeeds.elroy2;
@@ -2936,7 +4089,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Segundos que faltan para que el fantasma salga de la base.
   double _releaseTimer;
-  /// Cuenta regresiva para la próxima pared (solo Pinky la usa).
+  /// Cuenta regresiva para la próxima pared (solo Vespakron la usa).
   double _builderTimer = AbilityConfig.builderFirstDelay;
   /// Último valor de reversalTick que este fantasma ya atendió.
   int _seenReversalTick = 0;
@@ -2948,7 +4101,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Sprite en estado normal.
   Sprite? ghostSprite;
-  /// Sprite en estado asustado (niga.png).
+  /// Sprite en estado asustado (la versión "niga" propia de este personaje).
   Sprite? scaredSprite;
   /// Sprite del fantasma comido (mori.png).
   Sprite? moriSprite;
@@ -2975,10 +4128,10 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    // Respaldo en cadena: sprite propio -> ghost.png -> (si ambos faltan) cuadro
-    // de color al dibujar.
-    ghostSprite = _tryLoad(personality.spriteAsset) ?? _tryLoad('ghost.png');
-    scaredSprite = _tryLoad('niga.png');
+    // Cada personaje usa SUS propios sprites. Si alguno falta, se dibuja un
+    // cuadro de color al renderizar (no se reutiliza el sprite de otro).
+    ghostSprite = _tryLoad(personality.spriteAsset);
+    scaredSprite = _tryLoad(personality.scaredSpriteAsset);
     moriSprite = _tryLoad('mori.png');
 
     // Se sincroniza para no dar la vuelta por cambios de modo ocurridos antes de
@@ -3008,14 +4161,14 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     super.onRemove();
   }
 
-  /// Dibuja el campo del imán (solo Blinky), el cuerpo y el número.
+  /// Dibuja el campo del imán (solo Shardox) y el cuerpo. Los fantasmas no
+  /// muestran nombre ni número durante la partida.
   @override
   void render(Canvas canvas) {
-    if (type == GhostType.blinky && game.magnetStrength > 0) {
+    if (type == GhostType.shardox && game.magnetStrength > 0) {
       _renderMagnetField(canvas);
     }
     _renderBody(canvas);
-    drawEntityLabel(canvas, '$number', size, personality.color);
   }
 
   /// Aura roja de radio [AbilityConfig.magnetRadiusTiles] que se intensifica
@@ -3090,7 +4243,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   @override
   void update(double dt) {
     super.update(dt);
-    if (game.isGameOver || game.isGameWon) return;
+    if (game.isFrozen) return;
 
     // 1) Se entera de si debe dar la vuelta.
     _syncReversal();
@@ -3213,10 +4366,10 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     return false;
   }
 
-  /// Habilidad del Fantasma Constructor (solo Pinky): cada cierto tiempo, y
+  /// Habilidad del Fantasma Constructor (solo Vespakron): cada cierto tiempo, y
   /// solo en modo Chase, pide colocar una pared temporal detrás de Pac-Man.
   void _updateBuilder(double dt) {
-    if (type != GhostType.pinky) return;
+    if (type != GhostType.vespakron) return;
     if (isScared || game.modeController.mode != GhostMode.chase) return;
 
     _builderTimer -= dt;
@@ -3240,7 +4393,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
         // Comer un fantasma suma 200, 400, 800 o 1600 según la cadena.
         game.addScore(game.nextGhostEatScore());
       } else {
-        game.triggerGameOver(cause: 'Te atrapó el fantasma $number');
+        game.playerDied(cause: 'Te atrapó ${personality.displayName}');
       }
     }
   }
@@ -3315,9 +4468,9 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     // esquina como valor seguro.
     if (!game.player.isMounted) return personality.scatterTarget;
 
-    // Cruise Elroy: Blinky ignora el modo Scatter y sigue persiguiendo.
+    // Cruise Elroy: Shardox ignora el modo Scatter y sigue persiguiendo.
     final elroyHunting = kElroyIgnoresScatter &&
-        type == GhostType.blinky &&
+        type == GhostType.shardox &&
         game.elroyLevel > 0;
 
     if (game.modeController.baseMode == GhostMode.scatter && !elroyHunting) {
@@ -3328,11 +4481,11 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Reúne los datos que necesitan las personalidades.
   GhostContext _buildContext() {
-    // Valor por defecto por si Blinky aún no existe; se reemplaza al encontrarlo.
-    Vector2 blinkyTile = gridPos;
+    // Valor por defecto por si Shardox aún no existe; se reemplaza al encontrarlo.
+    Vector2 shardoxTile = gridPos;
     for (final g in game.children.whereType<Ghost>()) {
-      if (g.type == GhostType.blinky) {
-        blinkyTile = g.gridPos;
+      if (g.type == GhostType.shardox) {
+        shardoxTile = g.gridPos;
         break;
       }
     }
@@ -3340,7 +4493,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
       ghostTile: gridPos,
       pacTile: game.player.gridPos,
       pacDir: game.player.facing,
-      blinkyTile: blinkyTile,
+      shardoxTile: shardoxTile,
     );
   }
 
@@ -3395,18 +4548,37 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
 // WALL: MURO
 // -----------------------------------------------------------------------------
 
-/// Muro del laberinto, dibujado como un cuadrado azul sólido.
+/// Muro del laberinto, dibujado como un bloque neón violeta con esquinas
+/// redondeadas.
 class Wall extends PositionComponent {
   Wall(Vector2 pos, Vector2 sz) {
     position = pos;
     size = sz;
   }
 
-  /// Dibuja el muro como un cuadrado azul sólido.
+  /// Dibuja el muro: relleno oscuro, halo suave y borde neón nítido.
   @override
   void render(Canvas canvas) {
     super.render(canvas);
-    final paint = Paint()..color = const Color(0xFF1E1EEB);
-    canvas.drawRect(size.toRect(), paint);
+    final rrect = RRect.fromRectAndRadius(
+        size.toRect().deflate(1.5), const Radius.circular(6));
+    // Relleno oscuro.
+    canvas.drawRRect(rrect, Paint()..color = const Color(0xFF120A3C));
+    // Halo exterior suave.
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = const Color(0xFF8B5CFF).withAlpha(70)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4,
+    );
+    // Borde neón nítido.
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = const Color(0xFF8B5CFF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6,
+    );
   }
 }

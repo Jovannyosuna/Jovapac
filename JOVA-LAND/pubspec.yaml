@@ -31,10 +31,16 @@ flutter:
     - assets/images/icon.png
     - assets/images/jova_logo.png
     - assets/images/game_over.png
-    - assets/images/pacman.png
-    - assets/images/ghost.png
-    - assets/images/dot.png
-    - assets/images/niga.png
-    - assets/images/mori.png
     - assets/images/win.png
-    - assets/images/power.png
+    - assets/images/vance.png
+    - assets/images/shardox.png
+    - assets/images/shardoxniga.png
+    - assets/images/vespakron.png
+    - assets/images/vespakronniga.png
+    - assets/images/kyros.png
+    - assets/images/kyrosniga.png
+    - assets/images/pyros.png
+    - assets/images/pyrosniga.png
+    - assets/images/mori.png
+    - assets/images/rimora.png
+    - assets/images/mydra.png

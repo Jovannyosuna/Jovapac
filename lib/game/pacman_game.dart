@@ -12,7 +12,6 @@ import 'package:flame/events.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:pacman_juego/audio/game_audio.dart';
 import 'package:pacman_juego/config/game_config.dart';
@@ -21,6 +20,7 @@ import 'package:pacman_juego/game/ai/ghost_mode.dart';
 import 'package:pacman_juego/game/ai/ghost_personality.dart';
 import 'package:pacman_juego/game/components/countdown_overlay.dart';
 import 'package:pacman_juego/game/components/death_message.dart';
+import 'package:pacman_juego/game/components/fps_counter.dart';
 import 'package:pacman_juego/game/components/ghost.dart';
 import 'package:pacman_juego/game/components/laser_link.dart';
 import 'package:pacman_juego/game/components/lives_display.dart';
@@ -231,37 +231,34 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// [player]) antes de que existan.
   bool _ready = false;
 
-  /// Versiones reducidas de los sprites (los PNG originales pueden ser muy
-  /// grandes; dibujarlos reducidos cada frame es lo que hacía lento el juego).
+  /// Sprites ya decodificados en tamaño pequeño. Los PNG originales pueden ser
+  /// enormes (por ejemplo 1024 x 1024): decodificarlos completos gasta mucha
+  /// memoria y vuelve lento el juego, sobre todo en celular. Aquí se
+  /// decodifican DIRECTAMENTE a un tamaño cercano al que se ven en pantalla, y
+  /// la imagen grande nunca llega a existir en memoria.
   final Map<String, ui.Image> _small = {};
 
-  /// Imagen de [name] lista para dibujar: la versión reducida si existe, o la
-  /// original de la caché. Lanza una excepción si no se cargó (igual que
-  /// `images.fromCache`).
-  ui.Image gameImage(String name) => _small[name] ?? images.fromCache(name);
+  /// Imagen de [name] lista para dibujar. Lanza una excepción si no se cargó.
+  ui.Image gameImage(String name) {
+    final image = _small[name];
+    if (image == null) throw StateError('Imagen no cargada: $name');
+    return image;
+  }
 
-  /// Devuelve una copia de [src] cuyo lado mayor mide [target] píxeles. Se
-  /// dibuja UNA vez al cargar; después el juego usa la copia pequeña.
-  ui.Image _downscale(ui.Image src, int target) {
-    final w = src.width;
-    final h = src.height;
-    if (w <= target && h <= target) return src;
-    final k = target / max(w, h);
-    final nw = max(1, (w * k).round());
-    final nh = max(1, (h * k).round());
-    final recorder = ui.PictureRecorder();
-    Canvas(recorder).drawImageRect(
-      src,
-      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
-      Rect.fromLTWH(0, 0, nw.toDouble(), nh.toDouble()),
-      Paint()
-        ..filterQuality = FilterQuality.medium
-        ..isAntiAlias = true,
-    );
-    final picture = recorder.endRecording();
-    final out = picture.toImageSync(nw, nh);
-    picture.dispose();
-    return out;
+  /// Carga `assets/images/[name]` decodificándola a [maxSide] píxeles de ancho.
+  Future<void> _loadSprite(String name, int maxSide) async {
+    try {
+      final data = await rootBundle.load('assets/images/$name');
+      final codec = await ui.instantiateImageCodec(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        targetWidth: maxSide,
+      );
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      _small[name] = frame.image;
+    } catch (e) {
+      debugPrint('No se pudo cargar $name: $e');
+    }
   }
 
   /// Lado (px) de las siluetas de los personajes: igual que su tamaño en pantalla.
@@ -377,9 +374,12 @@ class PacManGame extends FlameGame with KeyboardEvents {
     if (shardox == null || !shardox.isMounted || !player.isMounted) return;
     if (shardox.isDead || shardox.isLeavingSpawn || shardox.isScared) return;
 
-    // Vector que apunta desde el jugador hacia Shardox (en casillas).
-    final toShardox = tilePosOf(shardox) - tilePosOf(player);
-    final dist = toShardox.length;
+    // Vector (en casillas) que apunta desde el jugador hacia Shardox. Ambos
+    // miden lo mismo, así que basta restar sus esquinas. Se calcula con números
+    // simples para no crear objetos en cada frame.
+    final dx = (shardox.position.x - player.position.x) / tileSize;
+    final dy = (shardox.position.y - player.position.y) / tileSize;
+    final dist = sqrt(dx * dx + dy * dy);
     // Fuera del radio de acción (o superpuestos: evita dividir entre casi cero).
     if (dist > AbilityConfig.magnetRadiusTiles || dist < 0.001) return;
 
@@ -387,7 +387,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     magnetStrength = 1.0 - dist / AbilityConfig.magnetRadiusTiles;
     // Dirección normalizada (longitud 1). El jugador la usa para saber si avanza
     // hacia Shardox o se aleja de él.
-    magnetDir = toShardox / dist;
+    magnetDir.setValues(dx / dist, dy / dist);
   }
 
   /// Indica si una entidad ubicada en [grid], que avanza hacia [dir] con avance
@@ -585,35 +585,21 @@ class PacManGame extends FlameGame with KeyboardEvents {
   Future<void> onLoad() async {
     super.onLoad();
 
-    // Precarga de imágenes en la caché. Luego los componentes las leen con
-    // images.fromCache(); si alguna falta, se registra el error y se continúa.
-    // Los sprites de los fantasmas (normal y asustado) salen de cada
-    // personalidad, así que agregar o renombrar uno se hace en un solo lugar.
+    // Sprites: se decodifican ya pequeños y en paralelo (ver [_loadSprite]).
     // (game_over, win y jova_logo se muestran con widgets de Flutter, no con
     // Flame, así que no se cargan aquí.)
-    final assets = <String>[
-      'vance.png',
-      'rimora.png',
-      'mydra.png',
-      'mori.png',
+    final jobs = <Future<void>>[
+      _loadSprite('vance.png', 64),
+      _loadSprite('rimora.png', 32),
+      _loadSprite('mydra.png', 48),
+      _loadSprite('mori.png', 64),
     ];
     for (final type in GhostType.values) {
       final personality = GhostPersonality.of(type);
-      assets.add(personality.spriteAsset);
-      assets.add(personality.scaredSpriteAsset);
+      jobs.add(_loadSprite(personality.spriteAsset, 64));
+      jobs.add(_loadSprite(personality.scaredSpriteAsset, 64));
     }
-    for (final name in assets) {
-      try {
-        await images.load(name);
-        // Se guarda una versión reducida para dibujar más rápido.
-        final target = name == 'rimora.png' ? 48 : (name == 'mydra.png' ? 80 : 96);
-        try {
-          _small[name] = _downscale(images.fromCache(name), target);
-        } catch (_) {}
-      } catch (e) {
-        debugPrint("No se pudo cargar $name: $e");
-      }
-    }
+    await Future.wait(jobs);
 
     // Siluetas de Vance y de los guardianes, para medir cuánto se encima cada
     // personaje con otro (ver [coverage]).
@@ -665,9 +651,11 @@ class PacManGame extends FlameGame with KeyboardEvents {
     // sesión y consultan el estado del juego al dibujarse.
     add(LivesDisplay());
     add(CountdownOverlay());
+    if (kShowFps) add(FpsCounter());
 
     // Precarga de sonidos (ya hubo un toque del usuario: botón "Iniciar juego").
-    await GameAudio.init();
+    // (El motor de audio ya empezó a cargar al abrir la app; aquí solo se espera.)
+    await GameAudio.init().timeout(const Duration(seconds: 4), onTimeout: () {});
 
     try {
       // Se protege con try/catch para que un error al crear la partida no impida

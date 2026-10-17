@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:math';
 import 'package:pacman_juego/audio/game_audio.dart';
 import 'package:pacman_juego/core/constants.dart';
 import 'package:pacman_juego/game/pacman_game.dart';

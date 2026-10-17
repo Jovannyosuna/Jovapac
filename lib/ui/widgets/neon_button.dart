@@ -11,6 +11,7 @@ import 'package:pacman_juego/core/constants.dart';
 /// Botón con estilo neón. [filled] = relleno de color; si no, solo contorno.
 class NeonButton extends StatelessWidget {
   const NeonButton({
+    super.key,
     required this.label,
     required this.onPressed,
     required this.s,

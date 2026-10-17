@@ -1,12 +1,13 @@
 // =============================================================================
 // game/components/countdown_overlay.dart
 //
-// Cuenta regresiva 3-2-1-0.
+// Cuenta regresiva 3-2-1-0 (los números se dibujan una sola vez en imágenes).
 // =============================================================================
 
 import 'package:flutter/material.dart';
 import 'package:flame/components.dart';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:pacman_juego/core/constants.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 
@@ -16,7 +17,12 @@ import 'package:pacman_juego/game/pacman_game.dart';
 /// Cada número entra con un rebote desde más grande, brilla con su propio
 /// color, lanza un anillo que se expande y se desvanece al final. Mientras se
 /// muestra, el juego permanece congelado. Solo dibuja; el tiempo lo lleva
-/// [PacManGame.countdownLeft]. Los textos se maquetan una sola vez.
+/// [PacManGame.countdownLeft].
+///
+/// Optimización: el brillo de los números (sombras muy desenfocadas) es de lo
+/// más caro de dibujar. Por eso cada número, con su brillo, se dibuja UNA vez
+/// en una imagen al cargar, y durante la cuenta solo se estampa esa imagen
+/// escalada y con transparencia.
 class CountdownOverlay extends PositionComponent
     with HasGameReference<PacManGame> {
   CountdownOverlay() {
@@ -34,16 +40,34 @@ class CountdownOverlay extends PositionComponent
     neonLime,
   ];
 
-  /// Números ya maquetados (se crean la primera vez que se necesitan).
-  final Map<int, TextPainter> _numbers = {};
+  /// Resolución de las imágenes (2 = nítidas aun al tamaño máximo, que es 2x).
+  static const double _bake = 2.0;
+
+  /// Margen alrededor del número para que quepa el brillo.
+  static const double _pad = 70.0;
+
+  /// Números ya dibujados en imagen (clave = 3, 2, 1, 0).
+  final Map<int, ui.Image> _numbers = {};
 
   /// Mensajes inferiores ya maquetados.
   final Map<String, TextPainter> _captions = {};
 
-  TextPainter _numberPainter(int number, Color color) {
-    return _numbers.putIfAbsent(
-      number,
-      () => TextPainter(
+  final Paint _veil = Paint()..color = const Color(0x78000000);
+  final Paint _ring = Paint()..style = PaintingStyle.stroke;
+  final Paint _imagePaint = Paint()..filterQuality = FilterQuality.medium;
+
+  @override
+  Future<void> onLoad() async {
+    super.onLoad();
+    for (int i = 0; i < 4; i++) {
+      _bakeNumber(3 - i, _colors[i]);
+    }
+  }
+
+  /// Dibuja el número [number] con su brillo en una imagen.
+  void _bakeNumber(int number, Color color) {
+    try {
+      final tp = TextPainter(
         text: TextSpan(
           text: '$number',
           style: TextStyle(
@@ -57,8 +81,19 @@ class CountdownOverlay extends PositionComponent
           ),
         ),
         textDirection: TextDirection.ltr,
-      )..layout(),
-    );
+      )..layout();
+      final w = tp.width + _pad * 2;
+      final h = tp.height + _pad * 2;
+      final recorder = ui.PictureRecorder();
+      final c = Canvas(recorder);
+      c.scale(_bake);
+      tp.paint(c, const Offset(_pad, _pad));
+      final picture = recorder.endRecording();
+      _numbers[number] =
+          picture.toImageSync((w * _bake).ceil(), (h * _bake).ceil());
+      picture.dispose();
+      tp.dispose();
+    } catch (_) {}
   }
 
   TextPainter _captionPainter(String text) {
@@ -99,20 +134,14 @@ class CountdownOverlay extends PositionComponent
     final cy = 24 + mazeH / 2;
 
     // Velo oscuro sobre el laberinto para que el número destaque.
-    canvas.drawRect(
-      Rect.fromLTWH(game.mazeOffsetX, 24, mazeW, mazeH),
-      Paint()..color = Colors.black.withAlpha(120),
-    );
+    canvas.drawRect(Rect.fromLTWH(game.mazeOffsetX, 24, mazeW, mazeH), _veil);
 
     // Anillo de energía que se expande y se desvanece.
+    _ring
+      ..color = color.withAlpha(((1 - p) * 200).round())
+      ..strokeWidth = 1 + 6 * (1 - p);
     canvas.drawCircle(
-      Offset(cx, cy),
-      40 + 130 * Curves.easeOut.transform(p),
-      Paint()
-        ..color = color.withAlpha(((1 - p) * 200).round())
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1 + 6 * (1 - p),
-    );
+        Offset(cx, cy), 40 + 130 * Curves.easeOut.transform(p), _ring);
 
     // Número: entra con rebote (de 2x a 1x) y se desvanece en el último 25 %.
     final enter = Curves.easeOut.transform((p / 0.4).clamp(0.0, 1.0));
@@ -120,23 +149,26 @@ class CountdownOverlay extends PositionComponent
     final scale = 2.0 - (enter * 0.4 + bounce * 0.6);
     final alpha = p < 0.75 ? 255 : ((1 - (p - 0.75) / 0.25) * 255).round();
 
-    final fade = alpha < 255;
-    if (fade) {
-      canvas.saveLayer(
-        Rect.fromCenter(center: Offset(cx, cy), width: 560, height: 320),
-        Paint()..color = Colors.white.withAlpha(alpha),
+    final image = _numbers[number];
+    if (image != null) {
+      _imagePaint.color = Color.fromARGB(alpha, 255, 255, 255);
+      final w = image.width.toDouble();
+      final h = image.height.toDouble();
+      canvas.save();
+      canvas.translate(cx, cy);
+      canvas.scale(scale / _bake);
+      canvas.drawImageRect(
+        image,
+        Rect.fromLTWH(0, 0, w, h),
+        Rect.fromLTWH(-w / 2, -h / 2, w, h),
+        _imagePaint,
       );
+      canvas.restore();
     }
-    canvas.save();
-    canvas.translate(cx, cy);
-    canvas.scale(scale);
-    final tp = _numberPainter(number, color);
-    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
-    canvas.restore();
-    if (fade) canvas.restore();
 
     // Mensaje inferior.
     final caption = _captionPainter(step < 3 ? '¡PREPÁRATE!' : '¡A JUGAR!');
-    caption.paint(canvas, Offset(cx - caption.width / 2, cy + 95 - caption.height / 2));
+    caption.paint(
+        canvas, Offset(cx - caption.width / 2, cy + 95 - caption.height / 2));
   }
 }

@@ -5,13 +5,13 @@
 // =============================================================================
 
 import 'package:flutter/material.dart';
-import 'dart:math';
 import 'package:pacman_juego/ui/widgets/neon_button.dart';
 
 /// Marco neón reutilizable para las ventanas informativas del menú: título,
 /// contenido desplazable y botón Cerrar.
 class InfoDialog extends StatelessWidget {
   const InfoDialog({
+    super.key,
     required this.title,
     required this.accent,
     required this.child,
@@ -93,6 +93,7 @@ class InfoDialog extends StatelessWidget {
 /// Bloque de texto con título de color y una lista de líneas con viñeta.
 class InfoSection extends StatelessWidget {
   const InfoSection({
+    super.key,
     required this.title,
     required this.color,
     required this.lines,

@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:math';
 import 'package:pacman_juego/audio/game_audio.dart';
 import 'package:pacman_juego/core/constants.dart';
 import 'package:pacman_juego/ui/widgets/neon_button.dart';
@@ -18,6 +17,7 @@ import 'package:pacman_juego/ui/widgets/neon_button.dart';
 /// no se puede cerrar sin escribir un nombre.
 class NameDialog extends StatefulWidget {
   const NameDialog({
+    super.key,
     required this.initial,
     required this.canCancel,
     required this.title,

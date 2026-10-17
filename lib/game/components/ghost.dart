@@ -12,6 +12,7 @@ import 'package:pacman_juego/config/game_config.dart';
 import 'package:pacman_juego/game/ai/ghost_mode.dart';
 import 'package:pacman_juego/game/ai/ghost_personality.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
+import 'package:pacman_juego/game/utils/game_sprite.dart';
 
 /// Enemigo del juego. Combina el estado individual del fantasma con el modo
 /// global de [GhostModeController]:
@@ -119,11 +120,11 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   final Random random = Random();
 
   /// Sprite en estado normal.
-  Sprite? ghostSprite;
+  GameSprite? ghostSprite;
   /// Sprite en estado asustado (la versión "niga" propia de este personaje).
-  Sprite? scaredSprite;
+  GameSprite? scaredSprite;
   /// Sprite del fantasma comido (mori.png).
-  Sprite? moriSprite;
+  GameSprite? moriSprite;
 
   /// Orden de desempate clásico cuando dos casillas están a igual distancia:
   /// arriba, izquierda, abajo, derecha.
@@ -135,9 +136,9 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   ];
 
   /// Obtiene un sprite de la caché; devuelve null si no está disponible.
-  Sprite? _tryLoad(String name) {
+  GameSprite? _tryLoad(String name) {
     try {
-      return Sprite(game.gameImage(name));
+      return GameSprite(game.gameImage(name));
     } catch (_) {
       return null;
     }
@@ -262,7 +263,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     // 2) Prioridad de estados: muerto > saliendo de la base > normal/asustado.
     if (isDead) {
       if (moriSprite != null) {
-        moriSprite!.render(canvas, size: size);
+        moriSprite!.drawBody(canvas);
       } else {
         canvas.drawRect(size.toRect(), Paint()..color = Colors.grey);
       }
@@ -275,7 +276,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
       final blinkNormal = left < 2.0 && (left * 4).floor().isEven;
       if (!blinkNormal) {
         if (scaredSprite != null) {
-          scaredSprite!.render(canvas, size: size);
+          scaredSprite!.drawBody(canvas);
         } else {
           canvas.drawRect(size.toRect(), Paint()..color = Colors.blue);
         }
@@ -284,7 +285,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     }
 
     if (ghostSprite != null) {
-      ghostSprite!.render(canvas, size: size);
+      ghostSprite!.drawBody(canvas);
     } else {
       canvas.drawRect(size.toRect(), Paint()..color = personality.color);
     }

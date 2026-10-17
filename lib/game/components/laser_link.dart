@@ -27,6 +27,10 @@ import 'package:pacman_juego/game/utils/geometry.dart';
 ///
 /// El rayo solo existe cuando ambos fantasmas están operativos (vivos, fuera
 /// de la base y sin estar asustados). El ciclo se pausa durante Frightened.
+///
+/// Optimización: usa vectores y pinceles reutilizables, así que no crea objetos
+/// nuevos en cada frame, y el texto del contador solo se vuelve a maquetar
+/// cuando cambia (una vez por segundo).
 class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   LaserLink() {
     priority = 50; // Se dibuja por encima de las demás entidades.
@@ -42,9 +46,25 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Reloj que anima el brillo pulsante del rayo.
   double _pulse = 0.0;
-  /// Centro del jugador en el frame anterior; permite detectar si cruzó el rayo
-  /// entre dos frames.
-  Vector2? _prevPac;
+
+  // Vectores reutilizables (se rellenan con setValues; así no se crean nuevos).
+  final Vector2 _a = Vector2.zero(); // Centro de Kyros.
+  final Vector2 _b = Vector2.zero(); // Centro de Pyros.
+  final Vector2 _cur = Vector2.zero(); // Centro del jugador (este frame).
+  final Vector2 _prev = Vector2.zero(); // Centro del jugador (frame anterior).
+  bool _hasPrev = false;
+
+  // Pinceles reutilizables.
+  final Paint _haloPaint = Paint()
+    ..strokeWidth = 7
+    ..strokeCap = StrokeCap.round;
+  final Paint _corePaint = Paint()
+    ..color = Colors.white
+    ..strokeWidth = 2
+    ..strokeCap = StrokeCap.round;
+  final Paint _dashPaint = Paint()
+    ..color = const Color(0x96FF5252)
+    ..strokeWidth = 1.5;
 
   /// Estados del frame anterior (para sonar solo al CAMBIAR de estado).
   bool _wasWarning = false;
@@ -79,7 +99,12 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
     }
     _pulse += dt;
 
-    final pac = game.player.isMounted ? centerOf(game.player) : null;
+    final player = game.player;
+    final hasPac = player.isMounted;
+    if (hasPac) {
+      _cur.setValues(player.position.x + player.size.x / 2,
+          player.position.y + player.size.y / 2);
+    }
     final kyros = game.ghosts[GhostType.kyros];
     final pyros = game.ghosts[GhostType.pyros];
 
@@ -92,17 +117,18 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
     _wasWarning = warningNow;
     _wasActive = activeNow;
 
-    if (pac != null && _isActive && _operational(kyros) && _operational(pyros)) {
-      final a = centerOf(kyros!);
-      final b = centerOf(pyros!);
+    if (hasPac && activeNow) {
+      _a.setValues(kyros!.position.x + kyros.size.x / 2,
+          kyros.position.y + kyros.size.y / 2);
+      _b.setValues(pyros!.position.x + pyros.size.x / 2,
+          pyros.position.y + pyros.size.y / 2);
 
       // Caso 1: el jugador está (casi) sobre la línea en este frame.
       final onBeam =
-          distPointToSegment(pac, a, b) <= AbilityConfig.laserHitRadius;
+          distPointToSegment(_cur, _a, _b) <= AbilityConfig.laserHitRadius;
       // Caso 2: entre el frame anterior y este, el jugador atravesó el rayo
       // (ocurre con movimientos rápidos).
-      final crossed =
-          _prevPac != null && segmentsIntersect(_prevPac!, pac, a, b);
+      final crossed = _hasPrev && segmentsIntersect(_prev, _cur, _a, _b);
 
       if (onBeam || crossed) {
         game.playerDied(
@@ -113,7 +139,8 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
       }
     }
     // Se guarda la posición actual para compararla en el siguiente frame.
-    _prevPac = pac;
+    if (hasPac) _prev.setFrom(_cur);
+    _hasPrev = hasPac;
   }
 
   /// Dibuja el contador del láser y, si corresponde, el rayo o su aviso.
@@ -125,44 +152,31 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
     final pyros = game.ghosts[GhostType.pyros];
     if (!_operational(kyros) || !_operational(pyros)) return;
 
-    final a = centerOf(kyros!);
-    final b = centerOf(pyros!);
+    final ax = kyros!.position.x + kyros.size.x / 2;
+    final ay = kyros.position.y + kyros.size.y / 2;
+    final bx = pyros!.position.x + pyros.size.x / 2;
+    final by = pyros.position.y + pyros.size.y / 2;
 
     if (_isActive) {
       // Valor que oscila entre 0 y 1 y modula la intensidad del halo rojo.
       final pulse = 0.5 + 0.5 * sin(_pulse * 14);
       // Rayo en dos capas: un halo rojo grueso y semitransparente, y encima un
       // núcleo blanco delgado que da el efecto de láser brillante.
-      canvas.drawLine(
-        Offset(a.x, a.y),
-        Offset(b.x, b.y),
-        Paint()
-          ..color = Colors.redAccent.withAlpha((80 + 90 * pulse).round())
-          ..strokeWidth = 7
-          ..strokeCap = StrokeCap.round,
-      );
-      canvas.drawLine(
-        Offset(a.x, a.y),
-        Offset(b.x, b.y),
-        Paint()
-          ..color = Colors.white
-          ..strokeWidth = 2
-          ..strokeCap = StrokeCap.round,
-      );
+      _haloPaint.color = Colors.redAccent.withAlpha((80 + 90 * pulse).round());
+      canvas.drawLine(Offset(ax, ay), Offset(bx, by), _haloPaint);
+      canvas.drawLine(Offset(ax, ay), Offset(bx, by), _corePaint);
     } else if (_isWarning) {
-      // Línea punteada de aviso (inofensiva).
-      final dir = b - a;
-      final len = dir.length;
+      // Línea punteada de aviso (inofensiva): trazos de 5 px cada 10 px.
+      final dx = bx - ax;
+      final dy = by - ay;
+      final len = sqrt(dx * dx + dy * dy);
       if (len < 1) return;
-      final unit = dir / len;
-      final paint = Paint()
-        ..color = Colors.redAccent.withAlpha(150)
-        ..strokeWidth = 1.5;
-      // Trazos de 5 px cada 10 px: forman la línea punteada.
+      final ux = dx / len;
+      final uy = dy / len;
       for (double d = 0; d < len; d += 10) {
-        final p1 = a + unit * d;
-        final p2 = a + unit * min(d + 5, len);
-        canvas.drawLine(Offset(p1.x, p1.y), Offset(p2.x, p2.y), paint);
+        final e = min(d + 5, len);
+        canvas.drawLine(Offset(ax + ux * d, ay + uy * d),
+            Offset(ax + ux * e, ay + uy * e), _dashPaint);
       }
     }
   }
@@ -170,7 +184,8 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   /// Contador del láser, centrado en la parte superior.
   void _renderHud(Canvas canvas) {
     // Se elige el mensaje y el color según el estado del ciclo: pausa, activo,
-    // cargando o enfriamiento.
+    // cargando o enfriamiento. Los segundos se muestran enteros para que el
+    // texto cambie solo una vez por segundo.
     String text;
     Color color;
     if (game.modeController.isFrightened) {
@@ -178,7 +193,7 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
       color = Colors.grey;
     } else if (_isActive) {
       final left = AbilityConfig.laserActiveSeconds - _t;
-      text = 'LÁSER: ACTIVO ${left.toStringAsFixed(1)}s';
+      text = 'LÁSER: ACTIVO ${left.ceil()}s';
       color = Colors.redAccent;
     } else if (_isWarning) {
       text = 'LÁSER: ¡CARGANDO!';
@@ -189,10 +204,12 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
       color = Colors.cyanAccent;
     }
 
-    // El texto se maqueta solo cuando cambia (no en cada frame).
+    // El texto se maqueta solo cuando cambia (no en cada frame); el anterior se
+    // libera para no acumular memoria.
     if (_hudPainter == null || text != _hudText || color != _hudColor) {
       _hudText = text;
       _hudColor = color;
+      _hudPainter?.dispose();
       _hudPainter = TextPainter(
         text: TextSpan(
           text: text,

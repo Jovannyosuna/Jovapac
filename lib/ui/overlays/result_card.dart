@@ -5,13 +5,12 @@
 // =============================================================================
 
 import 'package:flutter/material.dart';
-import 'dart:math';
 import 'package:pacman_juego/core/constants.dart';
 import 'package:pacman_juego/ui/widgets/maze_frame.dart';
 
 /// Ficha de estadística (etiqueta pequeña + valor grande).
 class StatChip extends StatelessWidget {
-  const StatChip(this.label, this.value, this.color, this.s);
+  const StatChip(this.label, this.value, this.color, this.s, {super.key});
 
   /// Etiqueta pequeña (por ejemplo "PUNTUACIÓN").
   final String label;

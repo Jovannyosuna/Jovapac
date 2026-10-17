@@ -5,7 +5,6 @@
 // =============================================================================
 
 import 'package:flutter/material.dart';
-import 'dart:math';
 import 'package:pacman_juego/core/constants.dart';
 import 'package:pacman_juego/game/ai/ghost_personality.dart';
 import 'package:pacman_juego/ui/dialogs/info_dialog.dart';

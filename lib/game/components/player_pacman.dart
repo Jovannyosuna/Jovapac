@@ -12,6 +12,7 @@ import 'package:pacman_juego/config/game_config.dart';
 import 'package:pacman_juego/data/player_profile.dart';
 import 'package:pacman_juego/game/components/entity_label.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
+import 'package:pacman_juego/game/utils/game_sprite.dart';
 
 /// Personaje controlado por el jugador.
 ///
@@ -21,7 +22,7 @@ import 'package:pacman_juego/game/pacman_game.dart';
 /// anticipar giros.
 class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
   /// Sprite del personaje. Si es nulo se dibuja un círculo amarillo.
-  Sprite? sprite;
+  GameSprite? sprite;
 
   /// Posición actual en coordenadas de la cuadrícula (columna, fila).
   Vector2 gridPos;
@@ -54,7 +55,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
 
     // Fantasma Imán: Shardox acelera a Pac-Man si avanza hacia él y lo frena
     // si se aleja. Moverse de lado (perpendicular) no cambia la velocidad.
-    if (game.magnetStrength > 0 && moveDir != Vector2.zero()) {
+    if (game.magnetStrength > 0 && (moveDir.x != 0 || moveDir.y != 0)) {
       final pull = moveDir.dot(game.magnetDir); // +1 hacia Shardox, -1 alejándose
       tiles *= 1.0 + AbilityConfig.magnetMaxPull * game.magnetStrength * pull;
     }
@@ -71,7 +72,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
     try {
       // fromCache lanza una excepción si la imagen no se cargó. Se ignora a
       // propósito: el jugador se dibujará con la figura de respaldo.
-      sprite = Sprite(game.gameImage('vance.png'));
+      sprite = GameSprite(game.gameImage('vance.png'));
     } catch (_) {}
     // El sprite mide 20 px dentro de una casilla de 24 px (2 px de margen por
     // lado, más el +4 de updatePixelPosition que lo deja casi centrado).
@@ -100,7 +101,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
     if (game.isDying && (game.deathElapsed * 8).floor().isOdd) return;
 
     if (sprite != null) {
-      sprite!.render(canvas, size: size);
+      sprite!.drawBody(canvas);
     } else {
       canvas.drawCircle(
         Offset(size.x / 2, size.y / 2),
@@ -127,7 +128,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
 
     // Solo se decide una nueva dirección cuando está exactamente en una casilla.
     if (moveProgress == 0.0) {
-      if (nextDir != Vector2.zero()) {
+      if ((nextDir.x != 0 || nextDir.y != 0)) {
         // Casilla a la que apunta el giro solicitado.
         int nextX = (gridPos.x + nextDir.x).toInt();
         int nextY = (gridPos.y + nextDir.y).toInt();
@@ -148,7 +149,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
     }
 
     // Movimiento interpolado entre la casilla actual y la siguiente.
-    if (moveDir != Vector2.zero()) {
+    if ((moveDir.x != 0 || moveDir.y != 0)) {
       // casillas/segundo x segundos = fracción de casilla recorrida. Así la
       // velocidad no depende de los cuadros por segundo del dispositivo.
       moveProgress += speed * dt;
@@ -180,7 +181,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
         game.recordPacTile(gridPos);
 
         // Aplica de inmediato el giro pendiente si ya es posible.
-        if (nextDir != Vector2.zero()) {
+        if ((nextDir.x != 0 || nextDir.y != 0)) {
           int nextX = (gridPos.x + nextDir.x).toInt();
           int nextY = (gridPos.y + nextDir.y).toInt();
           if (game.isWalkable(nextX, nextY, isGhost: false)) {
@@ -193,7 +194,7 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
 
     // "facing" conserva la última dirección aunque el jugador se detenga; Vespakron e
     // Kyros la usan para anticiparse.
-    if (moveDir != Vector2.zero()) facing = moveDir.clone();
+    if ((moveDir.x != 0 || moveDir.y != 0)) facing.setFrom(moveDir);
 
     // Recolección: rimora = 10 pts, mydra = 100 pts + pánico en los fantasmas.
     // Es una consulta directa por casilla (no recorre todos los componentes).

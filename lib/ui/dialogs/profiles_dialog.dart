@@ -16,7 +16,7 @@ import 'package:pacman_juego/ui/widgets/neon_button.dart';
 ///
 /// Se cierra devolviendo `true` si el jugador pidió crear un perfil nuevo.
 class ProfilesDialog extends StatefulWidget {
-  const ProfilesDialog();
+  const ProfilesDialog({super.key});
 
   @override
   State<ProfilesDialog> createState() => _ProfilesDialogState();

@@ -55,10 +55,15 @@ class AbilityConfig {
 }
 
 /// Fracción de la SILUETA de un personaje que debe quedar cubierta por el otro
-/// para que cuente un choque: 1/6. Así nadie muere ni es comido por rozarse los
-/// bordes del PNG; tienen que encimarse de verdad. Súbelo (por ejemplo 1 / 4)
-/// para exigir que se encimen más.
-const double kEatOverlapFraction = 1 / 6;
+/// para que cuente un choque: 1/4. Así nadie muere ni es comido por rozarse los
+/// bordes del PNG; tienen que encimarse de verdad. Súbelo (por ejemplo 1 / 3)
+/// para exigir que se encimen más, o bájalo (1 / 6) para lo contrario.
+const double kEatOverlapFraction = 1 / 4;
+
+/// Si es `true` se muestra un contador de FPS (cuadros por segundo) abajo a la
+/// izquierda del laberinto, para medir el rendimiento. Déjalo en `false` para
+/// jugar normal.
+const bool kShowFps = false;
 
 /// Tabla central de velocidades del juego.
 ///

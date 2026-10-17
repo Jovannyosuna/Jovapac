@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
-import 'package:flame/components.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 import 'package:pacman_juego/ui/overlays/game_overlays.dart';
 

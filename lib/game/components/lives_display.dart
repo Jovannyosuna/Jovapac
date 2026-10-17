@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flame/components.dart';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:pacman_juego/game/pacman_game.dart';
 
 /// Una faceta (triángulo) del corazón de cristal.
@@ -76,6 +77,11 @@ class _CrystalHeart {
   /// Brillo de cada faceta (0 = oscura, 1 = clara).
   final List<double> shade = [];
 
+  /// Color de cada faceta, calculado una sola vez.
+  late final List<Color> colors = [
+    for (int i = 0; i < facets.length; i++) colorOf(i)
+  ];
+
   static const Color _violet = Color(0xFF7A2CF0);
   static const Color _pink = Color(0xFFFF4DA6);
   static const Color _ice = Color(0xFFFFE6F7);
@@ -101,6 +107,11 @@ class _CrystalHeart {
 /// Muestra las vidas como corazones de cristal apilados de arriba hacia abajo
 /// en la columna derecha, fuera del laberinto (x = 774 a 900 del lienzo
 /// virtual).
+///
+/// Optimización: el corazón (facetas, aristas, borde y resplandor) se dibuja
+/// UNA vez en una imagen; en cada frame solo se estampa esa imagen (con su
+/// latido) y, de vez en cuando, el destello y la chispa. Los pinceles se
+/// reutilizan para no crear objetos en cada frame.
 ///
 /// Animaciones (todas suaves, sin parpadeos):
 /// - Corazón lleno: late levemente, un destello de luz lo recorre de vez en
@@ -143,6 +154,34 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
     textDirection: TextDirection.ltr,
   )..layout();
 
+  // --- Imagen "horneada" del corazón ----------------------------------------
+  /// Resolución de la imagen respecto al lienzo virtual.
+  static const double _bakeScale = 3.0;
+  /// Mitad del lado (en unidades virtuales) del área horneada, con margen para
+  /// el resplandor.
+  static const double _bakeHalf = 24.0;
+  static ui.Image? _baked;
+  static bool _bakeTried = false;
+  static final Rect _bakedSrc = Rect.fromLTWH(
+      0, 0, _bakeHalf * 2 * _bakeScale, _bakeHalf * 2 * _bakeScale);
+  static final Rect _bakedDst =
+      Rect.fromLTWH(-_bakeHalf, -_bakeHalf, _bakeHalf * 2, _bakeHalf * 2);
+
+  // --- Pinceles reutilizables ----------------------------------------------
+  static final Paint _imagePaint = Paint()..filterQuality = FilterQuality.medium;
+  static final Paint _slotPaint = Paint()
+    ..color = Colors.white24
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.5
+    ..strokeJoin = StrokeJoin.round;
+  static final Paint _fillPaint = Paint();
+  static final Paint _strokePaint = Paint()..style = PaintingStyle.stroke;
+  static final Paint _flashPaint = Paint();
+  static final Paint _sweepPaint = Paint()..color = const Color(0x6EFFFFFF);
+  static final Paint _glintPaint = Paint()
+    ..strokeWidth = 1.2
+    ..strokeCap = StrokeCap.round;
+
   /// Estado anterior de cada corazón (lleno / vacío), para detectar cambios.
   final List<bool> _full = List.filled(PacManGame.maxLives, true);
   /// Segundos desde el último cambio de cada corazón (99 = sin animación).
@@ -165,82 +204,104 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
     }
   }
 
-  /// Dibuja un corazón de cristal completo.
-  ///
-  /// [alpha]: opacidad (0 a 1). [sweep]: avance (0 a 1) del destello de luz, o
-  /// negativo si no hay destello. [twinkle]: intensidad (0 a 1) de la chispa.
-  void _drawCrystal(Canvas canvas, double scale, double alpha, double sweep,
-      double twinkle) {
-    final a255 = (alpha * 255).round();
-    canvas.save();
-    canvas.scale(scale);
-
-    // Resplandor rosa detrás del cristal: dos contornos anchos y translúcidos
-    // (más ligero que un desenfoque, que es muy caro en celulares).
-    canvas.drawPath(
-      _crystal.outline,
-      Paint()
-        ..color = Colors.pinkAccent.withAlpha((a255 * 0.16).round())
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 9
-        ..strokeJoin = StrokeJoin.round,
-    );
-    canvas.drawPath(
-      _crystal.outline,
-      Paint()
-        ..color = Colors.pinkAccent.withAlpha((a255 * 0.30).round())
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 5
-        ..strokeJoin = StrokeJoin.round,
-    );
-
-    // Facetas (cristal semitransparente).
-    for (int i = 0; i < _crystal.facets.length; i++) {
-      canvas.drawPath(
-        _crystal.facets[i].path,
-        Paint()..color = _crystal.colorOf(i).withAlpha((a255 * 0.85).round()),
-      );
+  /// Dibuja el corazón completo (resplandor, facetas, aristas y borde). Solo se
+  /// usa para hornear la imagen (con [blur]) o como respaldo (sin [blur]).
+  static void _paintCrystal(Canvas canvas, {required bool blur}) {
+    final glow1 = Paint()
+      ..color = Colors.pinkAccent.withAlpha(40)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 9
+      ..strokeJoin = StrokeJoin.round;
+    final glow2 = Paint()
+      ..color = Colors.pinkAccent.withAlpha(77)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
+      ..strokeJoin = StrokeJoin.round;
+    if (blur) {
+      glow1.maskFilter = const MaskFilter.blur(BlurStyle.normal, 7);
+      glow2.maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
     }
-    // Aristas internas.
+    canvas.drawPath(_crystal.outline, glow1);
+    canvas.drawPath(_crystal.outline, glow2);
+
+    final fill = Paint();
+    for (int i = 0; i < _crystal.facets.length; i++) {
+      fill.color = _crystal.colors[i].withAlpha(217);
+      canvas.drawPath(_crystal.facets[i].path, fill);
+    }
     final edge = Paint()
-      ..color = Colors.white.withAlpha((a255 * 0.28).round())
+      ..color = Colors.white.withAlpha(71)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.8;
     for (final f in _crystal.facets) {
       canvas.drawPath(f.path, edge);
     }
-    // Borde exterior.
     canvas.drawPath(
       _crystal.outline,
       Paint()
-        ..color = Colors.white.withAlpha((a255 * 0.85).round())
+        ..color = Colors.white.withAlpha(217)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.4
         ..strokeJoin = StrokeJoin.round,
     );
+  }
 
-    // Destello de luz que cruza el cristal en diagonal.
-    if (sweep >= 0 && alpha > 0.99) {
+  /// Dibuja el corazón una vez en una imagen (con el resplandor desenfocado).
+  static void _bake() {
+    _bakeTried = true;
+    try {
+      final recorder = ui.PictureRecorder();
+      final c = Canvas(recorder);
+      c.scale(_bakeScale);
+      c.translate(_bakeHalf, _bakeHalf);
+      _paintCrystal(c, blur: true);
+      final picture = recorder.endRecording();
+      final side = (_bakeHalf * 2 * _bakeScale).round();
+      _baked = picture.toImageSync(side, side);
+      picture.dispose();
+    } catch (_) {
+      _baked = null; // Se usará el dibujo directo (sin desenfoque).
+    }
+  }
+
+  /// Estampa un corazón de cristal. [a255]: opacidad (0 a 255). [sweep]: avance
+  /// (0 a 1) del destello, o negativo si no hay. [twinkle]: brillo (0 a 1) de la
+  /// chispa.
+  void _drawCrystal(
+      Canvas canvas, double scale, int a255, double sweep, double twinkle) {
+    if (!_bakeTried) _bake();
+    canvas.save();
+    canvas.scale(scale);
+
+    final baked = _baked;
+    if (baked != null) {
+      _imagePaint.color = Color.fromARGB(a255, 255, 255, 255);
+      canvas.drawImageRect(baked, _bakedSrc, _bakedDst, _imagePaint);
+    } else {
+      _paintCrystal(canvas, blur: false);
+    }
+
+    // Destello de luz que cruza el cristal en diagonal (solo mientras pasa).
+    if (sweep >= 0) {
       canvas.save();
       canvas.clipPath(_crystal.outline);
       canvas.rotate(0.5);
       final x = -_heartSize * 0.9 + sweep * _heartSize * 1.8;
       canvas.drawRect(
         Rect.fromLTWH(x, -_heartSize, _heartSize * 0.22, _heartSize * 2),
-        Paint()..color = Colors.white.withAlpha(110),
+        _sweepPaint,
       );
       canvas.restore();
     }
 
     // Chispa (estrella de cuatro puntas) en el lóbulo izquierdo.
-    final glint = Paint()
-      ..color = Colors.white.withAlpha((a255 * (0.35 + 0.65 * twinkle)).round())
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
-    final gc = Offset(-_heartSize * 0.22, -_heartSize * 0.2);
+    _glintPaint.color =
+        Colors.white.withAlpha((a255 * (0.35 + 0.65 * twinkle)).round());
+    const gx = -_heartSize * 0.22;
+    const gy = -_heartSize * 0.2;
     final len = 2.5 + 3.0 * twinkle;
-    canvas.drawLine(gc + Offset(-len, 0), gc + Offset(len, 0), glint);
-    canvas.drawLine(gc + Offset(0, -len), gc + Offset(0, len), glint);
+    canvas.drawLine(Offset(gx - len, gy), Offset(gx + len, gy), _glintPaint);
+    canvas.drawLine(Offset(gx, gy - len), Offset(gx, gy + len), _glintPaint);
 
     canvas.restore();
   }
@@ -248,41 +309,33 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
   /// Rotura del cristal: un destello inicial y luego cada faceta sale
   /// disparada desde el centro, gira y se desvanece. [p] va de 0 a 1.
   void _drawShatter(Canvas canvas, double p) {
-    final alpha = (1 - p).clamp(0.0, 1.0).toDouble();
-    final a255 = (alpha * 255).round();
+    final a255 = ((1 - p).clamp(0.0, 1.0) * 255).round();
     final ease = Curves.easeOut.transform(p);
 
     // Destello blanco del impacto (primer 12 % de la animación).
     if (p < 0.12) {
-      canvas.drawPath(
-        _crystal.outline,
-        Paint()..color = Colors.white.withAlpha(((1 - p / 0.12) * 200).round()),
-      );
+      _flashPaint.color = Colors.white.withAlpha(((1 - p / 0.12) * 200).round());
+      canvas.drawPath(_crystal.outline, _flashPaint);
     }
 
     for (int i = 0; i < _crystal.facets.length; i++) {
       final f = _crystal.facets[i];
       final len = f.centroid.distance;
-      final unit = len == 0 ? const Offset(0, -1) : f.centroid / len;
-      final offset = unit * (26 * ease);
+      final ux = len == 0 ? 0.0 : f.centroid.dx / len;
+      final uy = len == 0 ? -1.0 : f.centroid.dy / len;
 
       canvas.save();
       // Sale hacia afuera y cae un poco, como un fragmento de vidrio.
-      canvas.translate(offset.dx, offset.dy + 12 * p * p);
+      canvas.translate(ux * 26 * ease, uy * 26 * ease + 12 * p * p);
       canvas.translate(f.centroid.dx, f.centroid.dy);
       canvas.rotate((i.isEven ? 1 : -1) * 2.2 * p);
       canvas.translate(-f.centroid.dx, -f.centroid.dy);
-      canvas.drawPath(
-        f.path,
-        Paint()..color = _crystal.colorOf(i).withAlpha((a255 * 0.85).round()),
-      );
-      canvas.drawPath(
-        f.path,
-        Paint()
-          ..color = Colors.white.withAlpha((a255 * 0.8).round())
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1,
-      );
+      _fillPaint.color = _crystal.colors[i].withAlpha((a255 * 0.85).round());
+      canvas.drawPath(f.path, _fillPaint);
+      _strokePaint
+        ..color = Colors.white.withAlpha((a255 * 0.8).round())
+        ..strokeWidth = 1;
+      canvas.drawPath(f.path, _strokePaint);
       canvas.restore();
     }
   }
@@ -296,14 +349,7 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
       canvas.translate(_cx, _firstY + i * _gap);
 
       // Hueco vacío (siempre visible debajo).
-      canvas.drawPath(
-        _crystal.outline,
-        Paint()
-          ..color = Colors.white24
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5
-          ..strokeJoin = StrokeJoin.round,
-      );
+      canvas.drawPath(_crystal.outline, _slotPaint);
 
       if (_full[i]) {
         // Aparición escalonada (0.12 s entre corazones) y luego latido suave.
@@ -317,7 +363,7 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
           final phase = (_clock * 0.35 + i * 0.3) % 1.0;
           final sweep = phase < 0.3 ? phase / 0.3 : -1.0;
           final twinkle = 0.5 + 0.5 * sin(_clock * 3 + i * 1.7);
-          _drawCrystal(canvas, scale, 1.0, sweep, twinkle);
+          _drawCrystal(canvas, scale, 255, sweep, twinkle);
         }
       } else if (_t[i] < _loseSeconds) {
         _drawShatter(canvas, _t[i] / _loseSeconds);

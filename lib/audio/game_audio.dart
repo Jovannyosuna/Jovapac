@@ -1,81 +1,28 @@
 // =============================================================================
 // audio/game_audio.dart
 //
-// Música y efectos de sonido (reproductores reutilizables y vigilante de música).
+// Música y efectos de sonido con el motor flutter_soloud (hilo de audio propio).
 // =============================================================================
 
 import 'package:flutter/foundation.dart';
-import 'package:audioplayers/audioplayers.dart'
-    show
-        AudioPlayer,
-        AudioCache,
-        AssetSource,
-        PlayerState,
-        ReleaseMode,
-        AudioContext,
-        AudioContextAndroid,
-        AudioContextIOS,
-        AndroidAudioFocus,
-        AVAudioSessionOptions;
+import 'package:flutter_soloud/flutter_soloud.dart'
+    show SoLoud, AudioSource, SoundHandle;
 import 'dart:async';
 import 'package:pacman_juego/data/player_profile.dart';
 
-/// Grupo de reproductores para efectos de sonido, usados en rotación.
+/// Música y efectos de sonido del juego, con el motor `flutter_soloud`.
 ///
-/// Cada efecto se lanza con `play()` en el siguiente reproductor del grupo, así
-/// varios sonidos (incluso el mismo) pueden sonar a la vez sin cortarse. Se usa
-/// el modo normal de reproducción (MediaPlayer en Android), que es el más
-/// estable: el modo "baja latencia" (SoundPool) dejaba de sonar tras muchas
-/// repeticiones en el APK. Si un reproductor falla, se reemplaza por uno nuevo y
-/// se reintenta, para que el sonido nunca se quede "muerto".
-class _VoicePool {
-  _VoicePool(int size) {
-    for (int i = 0; i < size; i++) {
-      _players.add(AudioPlayer());
-    }
-  }
-
-  final List<AudioPlayer> _players = [];
-  int _next = 0;
-
-  /// Reproduce [path] en el siguiente reproductor en rotación.
-  void play(String path, double volume) {
-    final index = _next;
-    _next = (_next + 1) % _players.length;
-    unawaited(_playOn(index, path, volume));
-  }
-
-  Future<void> _playOn(int index, String path, double volume) async {
-    try {
-      await _players[index]
-          .play(AssetSource(path), volume: volume)
-          .timeout(const Duration(seconds: 2));
-    } catch (_) {
-      // El reproductor se atascó o falló: se cambia por uno nuevo y se reintenta.
-      try {
-        await _players[index].dispose();
-      } catch (_) {}
-      final fresh = AudioPlayer();
-      _players[index] = fresh;
-      try {
-        await fresh.play(AssetSource(path), volume: volume);
-      } catch (_) {}
-    }
-  }
-}
-
-/// Música y efectos de sonido del juego (paquete `audioplayers`).
+/// Por qué este motor: está hecho para videojuegos. Mezcla todos los sonidos en
+/// su propio hilo de audio (en C++), así que:
+/// - Reproducir un efecto NO crea objetos ni reproductores nuevos: no hay
+///   tirones ni basura que se acumule, por mucho que dure la partida.
+/// - Muchos sonidos (incluso el mismo) pueden sonar a la vez sin cortarse.
+/// - No usa el foco de audio de Android, así que nada pausa la música.
+/// - El audio no depende de los cuadros por segundo: si el juego se ralentiza,
+///   el sonido sigue en tiempo real.
 ///
-/// - La música usa un reproductor propio por pista, en bucle, y un "vigilante"
-///   ([ensureMusic]) que la reinicia si se detiene sin motivo.
-/// - Los efectos usan [_VoicePool] (varios reproductores en rotación):
-///   uno para las rimoras, uno para los sonidos de interfaz (clic y tecleo) y
-///   uno para todos los demás.
-/// - El contexto de audio de Android se configura SIN "foco de audio", para que
-///   un efecto de sonido nunca pause ni corte la música.
-///
-/// Los archivos están en `assets/audio/`. Todas las llamadas están protegidas:
-/// si el audio falla, el juego sigue funcionando.
+/// Todos los sonidos se cargan en memoria una sola vez al iniciar. Todas las
+/// llamadas están protegidas: si el audio falla, el juego sigue en silencio.
 class GameAudio {
   GameAudio._();
 
@@ -93,13 +40,12 @@ class GameAudio {
   /// Música que DEBERÍA sonar ahora (null = ninguna).
   static String? _wanted;
 
-  /// Música que realmente está sonando.
-  static String? _current;
+  /// Música que realmente está sonando y su "voz" en el motor.
+  static String? _currentName;
+  static SoundHandle? _musicHandle;
 
-  static _VoicePool? _rimoraPool;
-  static _VoicePool? _uiPool;
-  static _VoicePool? _fxPool;
-  static final Map<String, AudioPlayer> _music = {};
+  /// Sonidos ya cargados en memoria, por nombre de archivo.
+  static final Map<String, AudioSource> _sources = {};
 
   static const double _musicVolume = 0.40;
   static const double _sfxVolume = 0.85;
@@ -126,36 +72,22 @@ class GameAudio {
     'music_panic.wav',
   ];
 
-  /// Prepara todo el audio (solo corre una vez, aunque se llame varias).
+  /// Inicia el motor y carga todos los sonidos (solo corre una vez, aunque se
+  /// llame varias veces).
   static Future<void> init() => _initFuture ??= _init();
 
   static Future<void> _init() async {
     try {
-      await AudioPlayer.global.setAudioContext(AudioContext(
-        android: AudioContextAndroid(audioFocus: AndroidAudioFocus.none),
-        iOS: AudioContextIOS(options: const {AVAudioSessionOptions.mixWithOthers}),
-      ));
+      await SoLoud.instance.init();
     } catch (e) {
-      debugPrint('No se pudo configurar el contexto de audio: $e');
+      debugPrint('No se pudo iniciar el motor de audio: $e');
+      return; // Sin motor: el juego sigue en silencio.
     }
-    // Precarga los archivos en la caché para que el primer sonido sea inmediato.
     for (final file in [..._sfxFiles, ..._musicFiles]) {
       try {
-        await AudioCache.instance.load('audio/$file');
+        _sources[file] = await SoLoud.instance.loadAsset('assets/audio/$file');
       } catch (e) {
-        debugPrint('No se pudo precargar $file: $e');
-      }
-    }
-    _rimoraPool = _VoicePool(2);
-    _uiPool = _VoicePool(3);
-    _fxPool = _VoicePool(5);
-    for (final file in _musicFiles) {
-      try {
-        final player = AudioPlayer();
-        await player.setReleaseMode(ReleaseMode.loop);
-        _music[file] = player;
-      } catch (e) {
-        debugPrint('No se pudo crear el reproductor de $file: $e');
+        debugPrint('No se pudo cargar el sonido $file: $e');
       }
     }
     _ready = true;
@@ -167,68 +99,67 @@ class GameAudio {
   /// Reproduce un efecto de sonido. [volume] va de 0.0 a 1.0.
   static void sfx(String name, {double volume = 1.0}) {
     if (!enabled || !_ready) return;
-    final _VoicePool? pool;
-    if (name == 'sfx_rimora.wav') {
-      pool = _rimoraPool;
-    } else if (name == 'sfx_click.wav' || name == 'sfx_type.wav') {
-      pool = _uiPool;
-    } else {
-      pool = _fxPool;
+    final source = _sources[name];
+    if (source == null) return;
+    try {
+      // play() devuelve la "voz" al instante (no es un Future): no se espera.
+      SoLoud.instance.play(source, volume: _sfxVolume * volume);
+    } catch (_) {}
+  }
+
+  /// Detiene la "voz" de la música que esté sonando.
+  static Future<void> _stopMusicVoice() async {
+    final handle = _musicHandle;
+    _musicHandle = null;
+    _currentName = null;
+    if (handle != null) {
+      try {
+        await SoLoud.instance.stop(handle);
+      } catch (_) {}
     }
-    pool?.play('audio/$name', _sfxVolume * volume);
   }
 
   /// Empieza (o cambia a) la música [name] en bucle.
   static Future<void> playMusic(String name) async {
     _wanted = name;
     if (!enabled || !_ready || _starting) return;
-    if (_current == name) return; // Ya está sonando.
+    if (_currentName == name && _musicHandle != null) return; // Ya suena.
     _starting = true;
     try {
-      final previous = _current;
-      if (previous != null) await _music[previous]?.stop();
-      final player = _music[name];
-      if (player == null) return;
-      await player
-          .play(AssetSource('audio/$name'), volume: _musicVolume)
-          .timeout(const Duration(seconds: 3));
-      _current = name;
+      await _stopMusicVoice();
+      final source = _sources[name];
+      if (source == null) return;
+      final handle =
+          SoLoud.instance.play(source, volume: _musicVolume, looping: true);
+      _musicHandle = handle;
+      _currentName = name;
       // Si mientras arrancaba se pidió detener o cambiar la música, se corrige.
-      if (_wanted != name) {
-        _current = null;
-        await player.stop();
-      }
+      if (_wanted != name) await _stopMusicVoice();
     } catch (e) {
       debugPrint('No se pudo reproducir la música: $e');
     } finally {
       _starting = false;
     }
     final wanted = _wanted;
-    if (wanted != null && wanted != name && wanted != _current && enabled) {
+    if (wanted != null && wanted != name && wanted != _currentName && enabled) {
       await playMusic(wanted);
     }
   }
 
-  /// Detiene la música que esté sonando.
+  /// Detiene la música.
   static Future<void> stopMusic() async {
-    final playing = _current;
     _wanted = null;
-    _current = null;
     _pausedByGame = false;
-    if (playing != null) {
-      try {
-        await _music[playing]?.stop();
-      } catch (_) {}
-    }
+    await _stopMusicVoice();
   }
 
   /// Pausa la música (al pausar el juego).
   static Future<void> pauseMusic() async {
     _pausedByGame = true;
-    final playing = _current;
-    if (playing == null) return;
+    final handle = _musicHandle;
+    if (handle == null) return;
     try {
-      await _music[playing]?.pause();
+      SoLoud.instance.setPause(handle, true);
     } catch (_) {}
   }
 
@@ -237,16 +168,16 @@ class GameAudio {
     _pausedByGame = false;
     final wanted = _wanted;
     if (wanted == null || !enabled || !_ready) return;
-    if (_current == wanted) {
+    final handle = _musicHandle;
+    if (_currentName == wanted && handle != null) {
       try {
-        await _music[wanted]?.resume();
-      } catch (_) {
-        _current = null;
-        await playMusic(wanted);
-      }
-    } else {
-      await playMusic(wanted);
+        SoLoud.instance.setPause(handle, false);
+        return;
+      } catch (_) {}
     }
+    _musicHandle = null;
+    _currentName = null;
+    await playMusic(wanted);
   }
 
   /// Vigilante: si la música debería estar sonando pero se detuvo (por una
@@ -257,10 +188,17 @@ class GameAudio {
     if (wanted == null || !enabled || !_ready || _starting || _pausedByGame) {
       return;
     }
-    final player = _music[wanted];
-    if (player == null) return;
-    if (_current != wanted || player.state != PlayerState.playing) {
-      _current = null;
+    var healthy = false;
+    try {
+      final handle = _musicHandle;
+      healthy = handle != null &&
+          _currentName == wanted &&
+          SoLoud.instance.getIsValidVoiceHandle(handle) &&
+          !SoLoud.instance.getPause(handle);
+    } catch (_) {}
+    if (!healthy) {
+      _musicHandle = null;
+      _currentName = null;
       unawaited(playMusic(wanted));
     }
   }
@@ -269,15 +207,7 @@ class GameAudio {
   static Future<void> setEnabled(bool value) async {
     enabled = value;
     unawaited(ProfileStore.saveSound(value));
-    if (!value) {
-      final playing = _current;
-      _current = null;
-      if (playing != null) {
-        try {
-          await _music[playing]?.stop();
-        } catch (_) {}
-      }
-    }
+    if (!value) await _stopMusicVoice();
   }
 
   /// Se llama con el primer toque del usuario. Los navegadores bloquean el
@@ -288,7 +218,8 @@ class GameAudio {
     if (!kIsWeb) return;
     final wanted = _wanted;
     if (wanted != null && enabled && _ready) {
-      _current = null;
+      _musicHandle = null;
+      _currentName = null;
       unawaited(playMusic(wanted));
     }
   }

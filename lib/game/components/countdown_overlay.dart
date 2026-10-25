@@ -9,6 +9,7 @@ import 'package:flame/components.dart';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:pacman_juego/core/constants.dart';
+import 'package:pacman_juego/game/levels/level_data.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 
 /// Cuenta regresiva de [PacManGame.countdownSeconds] segundos (3, 2, 1, 0) que
@@ -51,6 +52,43 @@ class CountdownOverlay extends PositionComponent
 
   /// Mensajes inferiores ya maquetados.
   final Map<String, TextPainter> _captions = {};
+
+  /// Letreros de nivel ya maquetados (título, nombre y subtítulo).
+  final Map<int, List<TextPainter>> _banners = {};
+
+  List<TextPainter> _bannerFor(LevelData data) {
+    return _banners.putIfAbsent(data.number, () {
+      TextPainter make(String text, TextStyle style) => TextPainter(
+            text: TextSpan(text: text, style: style),
+            textDirection: TextDirection.ltr,
+          )..layout();
+      return [
+        make(
+          'NIVEL ${data.number}',
+          TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 6,
+            color: data.wallBorder,
+            shadows: [Shadow(color: data.wallBorder.withAlpha(160), blurRadius: 10)],
+          ),
+        ),
+        make(
+          data.name.toUpperCase(),
+          const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 3,
+              color: Colors.white),
+        ),
+        make(
+          data.subtitle,
+          const TextStyle(
+              fontSize: 12, fontStyle: FontStyle.italic, color: Colors.white70),
+        ),
+      ];
+    });
+  }
 
   final Paint _veil = Paint()..color = const Color(0x78000000);
   final Paint _ring = Paint()..style = PaintingStyle.stroke;
@@ -164,6 +202,14 @@ class CountdownOverlay extends PositionComponent
         _imagePaint,
       );
       canvas.restore();
+    }
+
+    // Letrero del nivel (solo al empezar un nivel, no al reaparecer).
+    if (game.showLevelBanner) {
+      final banner = _bannerFor(game.levelData);
+      banner[0].paint(canvas, Offset(cx - banner[0].width / 2, cy - 150));
+      banner[1].paint(canvas, Offset(cx - banner[1].width / 2, cy - 112));
+      banner[2].paint(canvas, Offset(cx - banner[2].width / 2, cy - 92));
     }
 
     // Mensaje inferior.

@@ -16,8 +16,8 @@ import 'package:pacman_juego/game/utils/geometry.dart';
 
 /// Rayo láser que une permanentemente a Kyros y Pyros.
 ///
-/// Ciclo de [AbilityConfig.laserActiveSeconds] activo +
-/// [AbilityConfig.laserCooldownSeconds] de enfriamiento. Durante los últimos
+/// Ciclo de [game.levelData.laserActive] activo +
+/// [game.levelData.laserCooldown] de enfriamiento. Durante los últimos
 /// [AbilityConfig.laserWarningSeconds] del enfriamiento se muestra una línea
 /// punteada de aviso (sin peligro).
 ///
@@ -37,12 +37,12 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   }
 
   /// Duración total de un ciclo: activo + enfriamiento.
-  static const double _cycle =
-      AbilityConfig.laserActiveSeconds + AbilityConfig.laserCooldownSeconds;
+  double get _cycle =>
+      game.levelData.laserActive + game.levelData.laserCooldown;
 
   /// Tiempo dentro del ciclo. Empieza al inicio del enfriamiento para dar
   /// margen al jugador al comenzar la partida.
-  double _t = AbilityConfig.laserActiveSeconds;
+  double _t = 0.0;
 
   /// Reloj que anima el brillo pulsante del rayo.
   double _pulse = 0.0;
@@ -75,8 +75,15 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   Color _hudColor = Colors.white;
   TextPainter? _hudPainter;
 
+  /// Empieza al inicio del enfriamiento del nivel actual.
+  @override
+  Future<void> onLoad() async {
+    super.onLoad();
+    _t = game.levelData.laserActive;
+  }
+
   /// `true` mientras el rayo está encendido y es mortal.
-  bool get _isActive => _t < AbilityConfig.laserActiveSeconds;
+  bool get _isActive => _t < game.levelData.laserActive;
   /// `true` durante el aviso de la línea punteada (inofensiva).
   bool get _isWarning =>
       !_isActive && _t >= _cycle - AbilityConfig.laserWarningSeconds;
@@ -84,7 +91,12 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   /// Un fantasma puede sostener el rayo solo si existe, está vivo, ya salió de
   /// la base y no está asustado.
   bool _operational(Ghost? g) =>
-      g != null && g.isMounted && !g.isDead && !g.isLeavingSpawn && !g.isScared;
+      g != null &&
+      g.isMounted &&
+      !g.isDead &&
+      !g.isLeavingSpawn &&
+      !g.isScared &&
+      !g.isIced;
 
   /// Avanza el ciclo del láser y comprueba si alcanzó al jugador.
   @override
@@ -192,7 +204,7 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
       text = 'LÁSER: EN PAUSA';
       color = Colors.grey;
     } else if (_isActive) {
-      final left = AbilityConfig.laserActiveSeconds - _t;
+      final left = game.levelData.laserActive - _t;
       text = 'LÁSER: ACTIVO ${left.ceil()}s';
       color = Colors.redAccent;
     } else if (_isWarning) {

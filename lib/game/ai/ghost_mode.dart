@@ -32,10 +32,10 @@ class GhostModeController {
 
   /// Duración (s) de cada fase: Scatter, Chase, Scatter, Chase, ...
   /// La última fase es infinita (Chase permanente).
-  final List<double> schedule;
+  List<double> schedule;
 
   /// Duración (s) del modo Frightened.
-  final double frightenedDuration;
+  double frightenedDuration;
 
   /// Índice de la fase actual en [schedule] (par = Scatter, impar = Chase).
   int _phase = 0;

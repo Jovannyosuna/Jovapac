@@ -13,6 +13,7 @@ import 'package:pacman_juego/game/ai/ghost_mode.dart';
 import 'package:pacman_juego/game/ai/ghost_personality.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 import 'package:pacman_juego/game/utils/game_sprite.dart';
+import 'package:pacman_juego/game/utils/geometry.dart';
 
 /// Enemigo del juego. Combina el estado individual del fantasma con el modo
 /// global de [GhostModeController]:
@@ -56,7 +57,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   double moveProgress = 0.0;
 
   /// Velocidad normal de un fantasma, en casillas por segundo.
-  double get speed => GameSpeeds.tiles(GameSpeeds.ghost);
+  double get speed => GameSpeeds.tiles(game.levelData.ghostPercent);
 
   /// Velocidad actual en casillas por segundo, según el estado:
   /// - Asustado: velocidad muy reducida.
@@ -70,16 +71,16 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     } else if (type == GhostType.shardox) {
       switch (game.elroyLevel) {
         case 2:
-          percent = GameSpeeds.elroy2;
+          percent = max(GameSpeeds.elroy2, game.levelData.ghostPercent + 0.02);
           break;
         case 1:
-          percent = GameSpeeds.elroy1;
+          percent = max(GameSpeeds.elroy1, game.levelData.ghostPercent);
           break;
         default:
-          percent = GameSpeeds.ghost;
+          percent = game.levelData.ghostPercent;
       }
     } else {
-      percent = GameSpeeds.ghost;
+      percent = game.levelData.ghostPercent;
     }
 
     var tiles = GameSpeeds.tiles(percent);
@@ -101,10 +102,13 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
   /// Está esperando o saliendo de la casa de fantasmas.
   bool isLeavingSpawn = true;
 
+  /// `true` mientras Vance lo tiene congelado: no se mueve ni hace daño.
+  bool get isIced => game.isFreezeActive && !isDead;
+
   /// Segundos que faltan para que el fantasma salga de la base.
   double _releaseTimer;
   /// Cuenta regresiva para la próxima pared (solo Vespakron la usa).
-  double _builderTimer = AbilityConfig.builderFirstDelay;
+  double _builderTimer = 0.0;
   /// Último valor de reversalTick que este fantasma ya atendió.
   int _seenReversalTick = 0;
   /// `true` cuando debe dar la vuelta en cuanto sea posible.
@@ -161,6 +165,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     // rápido.
     game.ghosts[type] = this;
     size = Vector2(20, 20);
+    _builderTimer = game.levelData.builderFirstDelay;
     updatePixelPosition();
   }
 
@@ -193,6 +198,7 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     if (panicked) _renderPanicAura(canvas);
     _renderBody(canvas);
     if (panicked) _renderPanicSparks(canvas);
+    if (isIced) _renderIce(canvas);
   }
 
   /// Resplandor pulsante y dos ondas que se expanden alrededor del fantasma
@@ -258,6 +264,32 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     );
   }
 
+  /// Capa de hielo sobre el guardián congelado: bloque azul translúcido con
+  /// borde blanco y destellos. Parpadea en el último segundo (se va a
+  /// descongelar).
+  void _renderIce(Canvas canvas) {
+    final left = game.freezeLeft;
+    if (left < 1.0 && (left * 8).floor().isEven) return;
+    final block = RRect.fromRectAndRadius(
+        const Rect.fromLTRB(-1, -1, 21, 21), const Radius.circular(5));
+    _auraPaint
+      ..style = PaintingStyle.fill
+      ..color = const Color(0x7090E0FF);
+    canvas.drawRRect(block, _auraPaint);
+    _auraPaint
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..color = const Color(0xE6FFFFFF);
+    canvas.drawRRect(block, _auraPaint);
+    // Destellos de hielo.
+    _auraPaint
+      ..strokeWidth = 1.0
+      ..color = const Color(0xCCFFFFFF);
+    canvas.drawLine(const Offset(4, 3), const Offset(8, 7), _auraPaint);
+    canvas.drawLine(const Offset(14, 13), const Offset(17, 17), _auraPaint);
+    canvas.drawLine(const Offset(16, 3), const Offset(13, 6), _auraPaint);
+  }
+
   /// Dibuja el cuerpo del fantasma según su estado actual.
   void _renderBody(Canvas canvas) {
     // 2) Prioridad de estados: muerto > saliendo de la base > normal/asustado.
@@ -319,6 +351,13 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
     if (isDead) {
       _pendingReverse = false;
       _updateDead(dt);
+      return;
+    }
+
+    // Congelado por Vance: se queda quieto (si está asustado todavía se puede
+    // comer).
+    if (isIced) {
+      if (!isLeavingSpawn) _checkPlayerCollision();
       return;
     }
 
@@ -442,13 +481,15 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
 
     // Si no hay una casilla válida, reintenta en un segundo.
     _builderTimer =
-        game.tryPlaceBuilderWall() ? AbilityConfig.builderCooldown : 1.0;
+        game.tryPlaceBuilderWall() ? game.levelData.builderCooldown : 1.0;
   }
 
   /// Colisión con Pac-Man: asustado = muere (200/400/800/1600 pts); normal =
   /// fin de partida.
   void _checkPlayerCollision() {
     if (!game.player.isMounted) return;
+    // Un guardián congelado (y no asustado) no hace daño.
+    if (isIced && !isScared) return;
     // El choque cuenta solo cuando ya se encimó 1/6 de la silueta:
     // - Asustado: Vance se come al guardián cuando cubre 1/6 del guardián.
     // - Normal: el guardián atrapa a Vance cuando cubre 1/6 de Vance.
@@ -607,6 +648,13 @@ class Ghost extends PositionComponent with HasGameReference<PacManGame> {
         gridPos.x = (game.maxCols - 1).toDouble();
       } else if (gridPos.x >= game.maxCols) {
         gridPos.x = 0;
+      }
+      // Portal: si llegó a un portal, aparece en su pareja.
+      final portalDest =
+          game.portalLinks[tileKey(gridPos.x.toInt(), gridPos.y.toInt())];
+      if (portalDest != null) {
+        gridPos.x = (portalDest % 100).toDouble();
+        gridPos.y = (portalDest ~/ 100).toDouble();
       }
       updatePixelPosition();
       return true;

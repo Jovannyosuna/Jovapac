@@ -15,6 +15,7 @@ import 'package:pacman_juego/data/player_profile.dart';
 import 'package:pacman_juego/ui/screens/main_menu_screen.dart';
 
 /// Punto de entrada de la aplicación.
+///
 /// En dispositivos móviles fuerza la orientación horizontal y activa el modo
 /// de pantalla completa inmersivo. En web y escritorio no modifica nada.
 void main() async {

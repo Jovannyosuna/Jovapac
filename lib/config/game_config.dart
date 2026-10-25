@@ -116,3 +116,25 @@ const bool kElroyIgnoresScatter = true;
 /// Pac-Man original: cuando Pac-Man mira hacia arriba, el objetivo también se
 /// desplaza a la izquierda. Por defecto está desactivado.
 const bool kEmulateOriginalOverflowBug = false;
+
+// -----------------------------------------------------------------------------
+// PUNTUACIÓN Y HABILIDAD DE HIELO
+// -----------------------------------------------------------------------------
+
+/// Puntos por comer una rimora.
+const int kRimoraPoints = 100;
+
+/// Puntos por comer una mydra.
+const int kMydraPoints = 500;
+
+/// Puntos por comer un guardián asustado.
+const int kGhostPoints = 750;
+
+/// Puntos que hay que ganar para recargar la habilidad de hielo. Al usarla NO se
+/// restan puntos del marcador: solo se vacía la barra y se vuelve a llenar.
+const double kAbilityCostPoints = 1500.0;
+
+/// Si es `true`, el selector de niveles deja elegir cualquier nivel (útil para
+/// probar los niveles 2 a 5 sin tener que ganar los anteriores). Déjalo en
+/// `false` para jugar normal.
+const bool kUnlockAllLevels = false;

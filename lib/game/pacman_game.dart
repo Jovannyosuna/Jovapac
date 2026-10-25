@@ -20,7 +20,12 @@ import 'package:pacman_juego/game/ai/ghost_mode.dart';
 import 'package:pacman_juego/game/ai/ghost_personality.dart';
 import 'package:pacman_juego/game/components/countdown_overlay.dart';
 import 'package:pacman_juego/game/components/death_message.dart';
+import 'package:pacman_juego/game/components/fog_of_war.dart';
 import 'package:pacman_juego/game/components/fps_counter.dart';
+import 'package:pacman_juego/game/components/gate_tiles.dart';
+import 'package:pacman_juego/game/components/hud_panel.dart';
+import 'package:pacman_juego/game/components/portal_tiles.dart';
+import 'package:pacman_juego/game/levels/level_data.dart';
 import 'package:pacman_juego/game/components/ghost.dart';
 import 'package:pacman_juego/game/components/laser_link.dart';
 import 'package:pacman_juego/game/components/lives_display.dart';
@@ -36,6 +41,67 @@ import 'package:pacman_juego/game/utils/geometry.dart';
 /// perdida o ganada), el escalado a cualquier tamaño de pantalla y la entrada
 /// por teclado.
 class PacManGame extends FlameGame with KeyboardEvents {
+  /// Nivel con el que empieza la partida (al reiniciar se vuelve a este).
+  final int startLevel;
+
+  PacManGame({this.startLevel = 1}) {
+    level = max(1, min(startLevel, kLevels.length));
+    _loadLevelGrid();
+  }
+
+  /// Nivel actual (1 a [kLevels].length).
+  int level = 1;
+
+  /// Datos del nivel actual (mapa, colores, dificultad, mecánicas).
+  LevelData get levelData => kLevels[level - 1];
+
+  /// Reloj general (s) que anima portales, compuertas y brillos.
+  double fxClock = 0.0;
+
+  /// Los muros del laberinto (se redibujan al cambiar de nivel).
+  late MazeWalls mazeWalls;
+
+  // --- Mecánicas especiales de los niveles ------------------------------------
+
+  /// Portales: casilla de entrada -> casilla de salida (ambas como tileKey).
+  final Map<int, int> portalLinks = {};
+
+  /// Casillas (tileKey) de las compuertas de fase A y de fase B.
+  final List<int> gateKeysA = [];
+  final List<int> gateKeysB = [];
+
+  /// `true` = fase A (las compuertas A están abiertas y las B cerradas).
+  bool gateAOpen = true;
+
+  /// `true` durante el último segundo antes de cambiar de fase.
+  bool gateWarning = false;
+
+  double _gateTimer = 0.0;
+
+  // --- Habilidad de hielo -------------------------------------------------------
+
+  /// Puntos acumulados hacia el próximo uso (0 a [kAbilityCostPoints]).
+  double abilityCharge = 0.0;
+
+  /// Segundos que le quedan al hielo (0 = no hay hielo activo).
+  double freezeLeft = 0.0;
+
+  /// Avance de la carga (0.0 a 1.0).
+  double get abilityProgress =>
+      (abilityCharge / kAbilityCostPoints).clamp(0.0, 1.0).toDouble();
+
+  /// `true` cuando la habilidad está cargada y se puede usar.
+  bool get abilityReady => abilityCharge >= kAbilityCostPoints;
+
+  /// `true` mientras los guardianes están congelados.
+  bool get isFreezeActive => freezeLeft > 0;
+
+  /// `true` mientras se muestra el menú de "nivel completado".
+  bool levelComplete = false;
+
+  /// `true` para mostrar el letrero del nivel durante la cuenta regresiva (al
+  /// empezar un nivel, no al reaparecer tras perder una vida).
+  bool showLevelBanner = true;
   /// Jugador actual. Se vuelve a crear cada vez que inicia una partida.
   late PlayerPacman player;
 
@@ -81,10 +147,8 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
   /// `true` cuando las entidades deben quedarse quietas: partida terminada,
   /// animación de muerte o cuenta regresiva.
-  bool get isFrozen => isGameOver || isGameWon || isDying || isCountingDown;
-
-  /// Nivel actual. Por ahora solo existe uno.
-  static const int currentLevel = 1;
+  bool get isFrozen =>
+      isGameOver || isGameWon || isDying || isCountingDown || levelComplete;
 
   /// `true` si en esta partida se superó el récord guardado en el perfil.
   bool newRecord = false;
@@ -110,33 +174,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Segundos desde la última revisión de que la música siga sonando.
   double _musicCheck = 0.0;
 
-  /// Matriz del laberinto (16 filas x 27 columnas).
-  ///
-  /// Leyenda:
-  /// - `0`: pasillo con rimora (punto normal)
-  /// - `1`: muro
-  /// - `2`: casa de los fantasmas (solo transitable por fantasmas)
-  /// - `3`: pasillo con mydra (punto grande / power-up)
-  ///
-  /// La fila 7 no tiene muros en los extremos y funciona como túnel lateral.
-  final List<List<int>> mazeGrid = [
-    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-    [1,3,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,3,1],
-    [1,0,1,1,1,0,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,0,1,1,1,0,1],
-    [1,0,1,0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,3,0,0,0,0,0,1,0,1],
-    [1,0,1,0,1,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,1,1,1,0,1,0,1],
-    [1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1],
-    [1,1,1,1,0,1,1,1,0,1,1,1,2,2,2,1,1,1,0,1,1,1,0,1,1,1,1],
-    [0,0,0,0,0,0,0,0,0,1,2,2,2,2,2,2,2,1,0,0,0,0,0,0,0,0,0],
-    [1,1,1,1,0,1,1,1,0,1,2,2,2,2,2,2,2,1,0,1,1,1,0,1,1,1,1],
-    [1,0,0,0,0,0,1,1,0,1,1,1,1,1,1,1,1,1,0,1,1,0,0,0,0,0,1],
-    [1,0,1,1,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,1,1,0,1],
-    [1,0,0,0,1,0,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,0,1,0,0,0,1],
-    [1,0,1,0,1,3,0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,3,1,0,1,0,1],
-    [1,0,1,0,1,1,0,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1,0,1,0,1],
-    [1,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,1],
-    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-  ];
+  /// Matriz del laberinto actual (16 filas x 27 columnas). Se arma desde el mapa
+  /// de texto del nivel (`LevelData.rows`); los códigos están en [TileCode].
+  List<List<int>> mazeGrid = [];
 
   /// Tamaño en píxeles (virtuales) de cada casilla del laberinto.
   final double tileSize = 24.0;
@@ -166,10 +206,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
   int rimorasRemaining = 0;
 
   /// Filas que tienen salida a los extremos del mapa (túneles laterales).
-  late final Set<int> tunnelRows = {
-    for (int r = 0; r < mazeGrid.length; r++)
-      if (mazeGrid[r].first != 1 || mazeGrid[r].last != 1) r
-  };
+  Set<int> tunnelRows = {};
 
   /// Cuántas columnas desde cada extremo cuentan como zona de túnel.
   final int tunnelDepth = 6;
@@ -225,8 +262,6 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Motivo de la derrota, para mostrarlo en el menú de Game Over.
   String? deathCause;
 
-  /// Fantasmas comidos en el power-up actual; define los puntos 200/400/800/1600.
-  int _ghostCombo = 0;
   /// Pasa a `true` al terminar onLoad(). Evita usar objetos `late` (como
   /// [player]) antes de que existan.
   bool _ready = false;
@@ -350,29 +385,26 @@ class PacManGame extends FlameGame with KeyboardEvents {
   void onMydraEaten() {
     modeController.startFrightened();
     GameAudio.sfx('sfx_mydra.wav');
-    // Cada power-up reinicia la cadena de puntos por fantasmas comidos.
-    _ghostCombo = 0;
     // Se asusta a los cuatro fantasmas registrados.
     for (final g in ghosts.values) {
       g.triggerPanic();
     }
   }
 
-  /// Puntos por comer un fantasma: 200, 400, 800 y 1600 con cada fantasma
-  /// consecutivo durante el mismo power-up.
-  int nextGhostEatScore() {
-    // 1 << n equivale a 2 elevado a n: 200, 400, 800 y 1600 (tope en n = 3).
-    final points = 200 * (1 << min(_ghostCombo, 3));
-    _ghostCombo++;
-    return points;
-  }
+  /// Puntos por comer un guardián asustado ([kGhostPoints]).
+  int nextGhostEatScore() => kGhostPoints;
 
   /// Calcula la atracción del Fantasma Imán (Shardox) sobre Pac-Man.
   void _updateMagnet() {
     magnetStrength = 0.0;
     final shardox = ghosts[GhostType.shardox];
     if (shardox == null || !shardox.isMounted || !player.isMounted) return;
-    if (shardox.isDead || shardox.isLeavingSpawn || shardox.isScared) return;
+    if (shardox.isDead ||
+        shardox.isLeavingSpawn ||
+        shardox.isScared ||
+        shardox.isIced) {
+      return;
+    }
 
     // Vector (en casillas) que apunta desde el jugador hacia Shardox. Ambos
     // miden lo mismo, así que basta restar sus esquinas. Se calcula con números
@@ -441,7 +473,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
       final wall = TempWall(col, row);
       tempWalls[tileKey(col, row)] = wall;
       add(wall);
-      GameAudio.sfx('sfx_wall.wav');
+      GameAudio.sfx('sfx_wax.wav');
       return true;
     }
     return false;
@@ -457,7 +489,11 @@ class PacManGame extends FlameGame with KeyboardEvents {
     }
     final cell = mazeGrid[row][col];
     // 1) Solo pasillos: nada de muros ni de la casa de fantasmas.
-    if (cell == 1 || cell == 2) return false;
+    if (cell != TileCode.rimora &&
+        cell != TileCode.mydra &&
+        cell != TileCode.empty) {
+      return false;
+    }
 
     final key = tileKey(col, row);
     // 2) No duplicar una pared en la misma casilla.
@@ -530,7 +566,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
   /// Color de fondo del juego (morado casi negro, a juego con el menú).
   @override
-  Color backgroundColor() => const Color(0xFF07051A);
+  Color backgroundColor() => levelData.bgBottom;
 
   // ---------------------------------------------------------------------------
   // ESCALADO RESPONSIVO
@@ -644,7 +680,12 @@ class PacManGame extends FlameGame with KeyboardEvents {
     highScore = currentProfile?.highScore ?? 0;
     highScoreText.text = 'HIGH SCORE: $highScore';
     // Laberinto (muros): se dibuja como una sola imagen, no como 150 piezas.
-    add(MazeWalls());
+    mazeWalls = MazeWalls();
+    add(mazeWalls);
+    add(PortalTiles());
+    add(GateTiles());
+    add(FogOfWar());
+    add(HudPanel());
     // Texto "quién te mató" (solo se dibuja mientras Pac-Man parpadea).
     add(DeathMessage());
     // Corazones de vida (columna derecha) y cuenta regresiva: viven toda la
@@ -671,6 +712,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// está en curso.
   @override
   void update(double dt) {
+    fxClock += dt;
     // El imán se recalcula ANTES de actualizar a los componentes, para que el
     // jugador use el valor de este mismo frame.
     if (_ready && !isFrozen) {
@@ -694,6 +736,18 @@ class PacManGame extends FlameGame with KeyboardEvents {
     if (!isFrozen) {
       // El reloj de modos (Scatter/Chase/Frightened) solo corre mientras se juega.
       modeController.update(dt);
+
+      // Compuertas de energía (niveles 3 y 5).
+      if (levelData.gatePeriod > 0) _updateGates(dt);
+
+      // Hielo de Vance: cuenta atrás hasta que los guardianes se descongelan.
+      if (freezeLeft > 0) {
+        freezeLeft -= dt;
+        if (freezeLeft <= 0) {
+          freezeLeft = 0.0;
+          GameAudio.sfx('sfx_thaw.wav');
+        }
+      }
 
       // La música cambia a la versión de pánico mientras dura Frightened.
       final frightened = modeController.isFrightened;
@@ -740,15 +794,13 @@ class PacManGame extends FlameGame with KeyboardEvents {
     }
   }
 
-  /// Inicia o reinicia una partida.
-  ///
-  /// Reinicia la puntuación y los estados, elimina las entidades anteriores,
-  /// reconstruye el laberinto y coloca al jugador y a los cuatro fantasmas.
+  /// Inicia o reinicia una partida desde cero: puntuación en 0, 3 vidas, la
+  /// habilidad sin carga y el primer nivel de la partida ([startLevel]).
   void startGame() {
     score = 0;
     isGameOver = false;
     isGameWon = false;
-    // Partida nueva desde cero: vidas completas y cuenta regresiva.
+    levelComplete = false;
     lives = maxLives;
     isDying = false;
     deathElapsed = 0.0;
@@ -757,29 +809,65 @@ class PacManGame extends FlameGame with KeyboardEvents {
     _lastCountStep = -1;
     _musicOn = false;
     _autosave = 0.0;
+    abilityCharge = 0.0;
+    showLevelBanner = true;
     saveProgress(); // Guarda el récord de la partida anterior.
     GameAudio.stopMusic();
+    deathCause = null;
+    scoreText.text = 'SCORE: $score';
+    // Cierra cualquier menú que haya quedado abierto de la partida anterior.
+    overlays.remove('GameOverMenu');
+    overlays.remove('GameWinMenu');
+    overlays.remove('LevelCompleteMenu');
+    overlays.remove('PauseMenu');
+    resumeEngine(); // Un reinicio siempre quita la pausa.
+
+    level = max(1, min(startLevel, kLevels.length));
+    _setupLevel();
+    GameAudio.sfx('sfx_level_start.wav');
+  }
+
+  /// Pasa al siguiente nivel (desde el menú de "nivel completado"). Se conservan
+  /// la puntuación, las vidas y la carga de la habilidad.
+  void nextLevel() {
+    if (!levelComplete) return;
+    overlays.remove('LevelCompleteMenu');
+    levelComplete = false;
+    level = min(level + 1, kLevels.length);
+    countdownLeft = countdownSeconds;
+    _lastCountStep = -1;
+    _musicOn = false;
+    showLevelBanner = true;
+    _setupLevel();
+    saveProgress();
+    GameAudio.sfx('sfx_level_start.wav');
+  }
+
+  /// Arma el nivel actual: lee el mapa, configura la dificultad, redibuja los
+  /// muros y coloca las rimoras, a Vance y a los guardianes.
+  void _setupLevel() {
+    _loadLevelGrid();
+    modeController.schedule = levelData.schedule;
+    modeController.frightenedDuration = levelData.frightenedSeconds;
     modeController.reset();
-    // expand() aplana la matriz en una sola lista; se cuentan los pasillos con
-    // punto (0) y los power-ups (3).
-    totalRimoras = mazeGrid.expand((r) => r).where((c) => c == 0 || c == 3).length;
+    // Se cuentan las casillas con rimora (0) y con mydra (3).
+    totalRimoras = mazeGrid
+        .expand((r) => r)
+        .where((c) => c == TileCode.rimora || c == TileCode.mydra)
+        .length;
     rimorasRemaining = totalRimoras;
     ghosts.clear();
     solidWalls.clear();
     tempWalls.clear();
     pacTrail.clear();
     magnetStrength = 0.0;
-    deathCause = null;
-    _ghostCombo = 0;
-    scoreText.text = 'SCORE: $score';
-    // Cierra cualquier menú que haya quedado abierto de la partida anterior.
-    overlays.remove('GameOverMenu');
-    overlays.remove('GameWinMenu');
-    overlays.remove('PauseMenu');
-    resumeEngine(); // Un reinicio siempre quita la pausa.
+    freezeLeft = 0.0;
+    gateAOpen = true;
+    gateWarning = false;
+    _gateTimer = 0.0;
 
-    // Limpieza: se eliminan las entidades de la partida anterior antes de
-    // reconstruirlas. Los marcadores de texto se conservan.
+    // Limpieza: se eliminan las entidades del nivel anterior antes de
+    // reconstruirlas. Los marcadores de texto y el panel se conservan.
     children
         .where((c) =>
             c is PlayerPacman ||
@@ -790,12 +878,85 @@ class PacManGame extends FlameGame with KeyboardEvents {
         .toList()
         .forEach((c) => c.removeFromParent());
 
-    // Reconstruye las rimoras y mydras a partir de mazeGrid (los muros se
-    // dibujan una sola vez, en MazeWalls).
+    mazeWalls.rebuild(); // Muros con los colores del nivel.
     _buildGridMaze();
-
-    // Jugador, fantasmas y láser en sus posiciones iniciales.
     _spawnEntities();
+  }
+
+  /// Lee el mapa del nivel y calcula los túneles, los portales y las compuertas.
+  void _loadLevelGrid() {
+    mazeGrid = levelData.buildGrid();
+    tunnelRows = {
+      for (int r = 0; r < mazeGrid.length; r++)
+        if (mazeGrid[r].first != TileCode.wall ||
+            mazeGrid[r].last != TileCode.wall)
+          r
+    };
+    portalLinks.clear();
+    gateKeysA.clear();
+    gateKeysB.clear();
+    final firstOf = <int, int>{};
+    for (int r = 0; r < mazeGrid.length; r++) {
+      for (int c = 0; c < mazeGrid[r].length; c++) {
+        final code = mazeGrid[r][c];
+        if (code >= TileCode.portalA1 && code <= TileCode.portalB2) {
+          firstOf[code] = tileKey(c, r);
+        } else if (code == TileCode.gateA) {
+          gateKeysA.add(tileKey(c, r));
+        } else if (code == TileCode.gateB) {
+          gateKeysB.add(tileKey(c, r));
+        }
+      }
+    }
+    const partner = {
+      TileCode.portalA1: TileCode.portalA2,
+      TileCode.portalA2: TileCode.portalA1,
+      TileCode.portalB1: TileCode.portalB2,
+      TileCode.portalB2: TileCode.portalB1,
+    };
+    partner.forEach((code, other) {
+      final from = firstOf[code];
+      final to = firstOf[other];
+      if (from != null && to != null) portalLinks[from] = to;
+    });
+  }
+
+  /// `true` si la compuerta con código [cell] está abierta en la fase actual.
+  bool isGateOpen(int cell) =>
+      cell == TileCode.gateA ? gateAOpen : !gateAOpen;
+
+  /// Cambia la fase de las compuertas cada `LevelData.gatePeriod` segundos. Si
+  /// alguien está dentro de una compuerta que se va a cerrar, espera.
+  void _updateGates(double dt) {
+    final period = levelData.gatePeriod;
+    _gateTimer += dt;
+    gateWarning = _gateTimer >= period - 1.0;
+    if (_gateTimer < period) return;
+    final closing = gateAOpen ? gateKeysA : gateKeysB;
+    for (final key in closing) {
+      if (isTileOccupied(key % 100, key ~/ 100)) {
+        _gateTimer = period - 0.3; // Reintenta en 0.3 s.
+        return;
+      }
+    }
+    gateAOpen = !gateAOpen;
+    _gateTimer = 0.0;
+    gateWarning = false;
+    GameAudio.sfx('sfx_gate.wav');
+  }
+
+  /// Usa la habilidad de hielo: congela a los guardianes `LevelData.freezeSeconds`.
+  /// Solo si está cargada. No se restan puntos: la barra se vacía y se vuelve a
+  /// llenar con los puntos que se ganen.
+  void useAbility() {
+    if (isFrozen || paused) return;
+    if (!abilityReady || isFreezeActive) {
+      if (!abilityReady) GameAudio.sfx('sfx_no_power.wav');
+      return;
+    }
+    abilityCharge = 0.0;
+    freezeLeft = levelData.freezeSeconds;
+    GameAudio.sfx('sfx_freeze.wav');
   }
 
   /// Crea al jugador, a los cuatro fantasmas y el láser en su posición inicial.
@@ -806,18 +967,19 @@ class PacManGame extends FlameGame with KeyboardEvents {
     recordPacTile(player.gridPos);
 
     // Cada fantasma tiene su personalidad y sale de la base en un momento
-    // distinto (releaseDelay, en segundos).
-    add(Ghost(Vector2(13, 7), GhostType.shardox, releaseDelay: 0));
-    add(Ghost(Vector2(14, 7), GhostType.vespakron, releaseDelay: 2));
-    add(Ghost(Vector2(13, 8), GhostType.kyros, releaseDelay: 6));
-    add(Ghost(Vector2(14, 8), GhostType.pyros, releaseDelay: 10));
+    // distinto (releaseDelay, en segundos), que depende del nivel.
+    final delays = levelData.releaseDelays;
+    add(Ghost(Vector2(13, 7), GhostType.shardox, releaseDelay: delays[0]));
+    add(Ghost(Vector2(14, 7), GhostType.vespakron, releaseDelay: delays[1]));
+    add(Ghost(Vector2(13, 8), GhostType.kyros, releaseDelay: delays[2]));
+    add(Ghost(Vector2(14, 8), GhostType.pyros, releaseDelay: delays[3]));
 
     // Láser que une a Kyros y Pyros.
     add(LaserLink());
   }
 
   /// Quita al jugador, los fantasmas, el láser y las paredes temporales, y
-  /// limpia sus registros. NO toca los puntos, la puntuación ni las vidas.
+  /// limpia sus registros. NO toca las rimoras, la puntuación ni las vidas.
   void _removeEntities() {
     children
         .where((c) =>
@@ -832,7 +994,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
     tempWalls.clear();
     pacTrail.clear();
     magnetStrength = 0.0;
-    _ghostCombo = 0;
+    freezeLeft = 0.0;
+    gateAOpen = true;
+    gateWarning = false;
+    _gateTimer = 0.0;
     modeController.reset();
   }
 
@@ -846,7 +1011,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
     required String detail,
     Color color = Colors.redAccent,
   }) {
-    if (isDying || isGameOver || isGameWon || isCountingDown) return;
+    if (isDying || isGameOver || isGameWon || isCountingDown || levelComplete) {
+      return;
+    }
     lives = max(0, lives - 1);
     isDying = true;
     deathElapsed = 0.0;
@@ -873,6 +1040,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     countdownLeft = countdownSeconds;
     _lastCountStep = -1;
     _musicOn = false;
+    showLevelBanner = false;
   }
 
   /// Guarda en el perfil la mayor puntuación y el nivel alcanzado, pero SOLO si
@@ -885,8 +1053,11 @@ class PacManGame extends FlameGame with KeyboardEvents {
       profile.highScore = highScore;
       changed = true;
     }
-    if (currentLevel > profile.level) {
-      profile.level = currentLevel;
+    // Nivel alcanzado: al completar un nivel se desbloquea el siguiente.
+    final reached =
+        levelComplete ? min(level + 1, kLevels.length) : level;
+    if (reached > profile.level) {
+      profile.level = reached;
       changed = true;
     }
     if (changed) unawaited(ProfileStore.save(profile));
@@ -897,6 +1068,10 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// La partida se gana cuando ya no queda ninguna rimora en el laberinto.
   void addScore(int points) {
     score += points;
+    // La habilidad de hielo se carga con los puntos ganados.
+    final wasReady = abilityReady;
+    abilityCharge = min(kAbilityCostPoints, abilityCharge + points);
+    if (!wasReady && abilityReady) GameAudio.sfx('sfx_ready.wav');
     scoreText.text = 'SCORE: $score';
 
     // El récord se actualiza en vivo; por eso "score >= highScore" al terminar
@@ -909,7 +1084,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
     // rimorasRemaining lo decrementa el jugador al comer; al llegar a 0 se gana.
     if (rimorasRemaining <= 0) {
-      triggerGameWin();
+      triggerLevelClear();
     }
   }
 
@@ -943,6 +1118,11 @@ class PacManGame extends FlameGame with KeyboardEvents {
     int cell = mazeGrid[row][col];
     if (cell == 1) return false;
     if (cell == 2 && !isGhost) return false;
+    // Compuertas de energía: cerradas bloquean el paso (a todos).
+    if ((cell == TileCode.gateA || cell == TileCode.gateB) &&
+        !isGateOpen(cell)) {
+      return false;
+    }
     if (solidWalls.contains(tileKey(col, row))) return false; // Pared temporal
     return true;
   }
@@ -1020,6 +1200,23 @@ class PacManGame extends FlameGame with KeyboardEvents {
     saveProgress();
   }
 
+  /// Se comieron todas las rimoras: si quedan niveles, muestra "nivel completado";
+  /// si era el último, la victoria final.
+  void triggerLevelClear() {
+    if (isGameOver || isGameWon || levelComplete) return;
+    if (level >= kLevels.length) {
+      triggerGameWin();
+      return;
+    }
+    levelComplete = true;
+    freezeLeft = 0.0;
+    overlays.add('LevelCompleteMenu');
+    _musicOn = false;
+    GameAudio.stopMusic();
+    GameAudio.sfx('sfx_level_up.wav');
+    saveProgress();
+  }
+
   /// Termina la partida por victoria y muestra el menú de Victoria.
   void triggerGameWin() {
     if (isGameOver || isGameWon) return;
@@ -1043,6 +1240,11 @@ class PacManGame extends FlameGame with KeyboardEvents {
     if (event is KeyDownEvent &&
         event.logicalKey == LogicalKeyboardKey.escape) {
       togglePause();
+      return KeyEventResult.handled;
+    }
+    // Barra espaciadora: habilidad de hielo.
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
+      useAbility();
       return KeyEventResult.handled;
     }
     // En pausa se "consumen" las teclas para que no muevan al jugador.

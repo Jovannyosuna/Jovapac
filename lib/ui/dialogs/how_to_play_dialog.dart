@@ -55,11 +55,36 @@ class _HowToPlayContent extends StatelessWidget {
           ],
         ),
         InfoSection(
+          title: 'HABILIDAD DE HIELO',
+          color: Colors.lightBlueAccent,
+          lines: [
+            'Cada 1500 puntos que ganes se carga tu habilidad. La barrita bajo Vance va de verde a naranja y se pone roja cuando está lista.',
+            'Úsala con la barra espaciadora (PC) o tocando el botón de hielo a la derecha (celular). Los guardianes se congelan unos segundos: no se mueven ni te dañan.',
+            'Al usarla no pierdes puntos; la barra se vacía y vuelves a cargarla desde cero.',
+          ],
+        ),
+        InfoSection(
+          title: 'PUNTOS',
+          color: neonLime,
+          lines: [
+            'Rimora: 100 puntos. Mydra: 500. Guardián asustado: 750.',
+          ],
+        ),
+        InfoSection(
+          title: 'NIVELES',
+          color: Colors.orangeAccent,
+          lines: [
+            'Hay 5 niveles. Cada uno tiene su propio mapa y es más difícil que el anterior.',
+            'Nivel 2: portales que te cruzan de un lado a otro. Nivel 3: compuertas de energía que se abren y se cierran. Nivel 4: niebla, solo ves lo que tienes cerca. Nivel 5: todo junto.',
+            'Al completar un nivel se desbloquea el siguiente en tu perfil.',
+          ],
+        ),
+        InfoSection(
           title: 'CONSEJOS',
           color: Colors.yellowAccent,
           lines: [
             'Las mydras (puntos grandes) asustan a los fantasmas: ¡puedes comerlos por más puntos!',
-            'Cuidado con el láser entre Kyros y Pyros, las paredes de Vespakron y la atracción de Shardox.',
+            'Cuidado con el láser entre Kyros y Pyros, las paredes de cera de abeja de Vespakron y la atracción de Shardox.',
             'Cuando pierdes una vida, la partida sigue con las rimoras que ya comiste.',
           ],
         ),

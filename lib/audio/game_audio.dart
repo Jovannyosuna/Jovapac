@@ -61,7 +61,17 @@ class GameAudio {
     'sfx_win.wav',
     'sfx_laser_warn.wav',
     'sfx_laser_on.wav',
-    'sfx_wall.wav',
+    'sfx_wax.wav',
+    'sfx_wax_set.wav',
+    'sfx_wax_melt.wav',
+    'sfx_freeze.wav',
+    'sfx_thaw.wav',
+    'sfx_ready.wav',
+    'sfx_no_power.wav',
+    'sfx_portal.wav',
+    'sfx_gate.wav',
+    'sfx_level_up.wav',
+    'sfx_level_start.wav',
     'sfx_click.wav',
     'sfx_type.wav',
   ];
@@ -91,6 +101,9 @@ class GameAudio {
       }
     }
     _ready = true;
+    // Mensaje de diagnóstico: aparece en la consola de `flutter run`.
+    debugPrint('Audio listo: ${_sources.length} de '
+        '${_sfxFiles.length + _musicFiles.length} sonidos cargados.');
     // Si se pidió música mientras cargaba, arranca ahora.
     final wanted = _wanted;
     if (wanted != null) await playMusic(wanted);

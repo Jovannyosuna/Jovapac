@@ -16,6 +16,9 @@ import 'package:pacman_juego/ui/dialogs/characters_dialog.dart';
 import 'package:pacman_juego/ui/dialogs/how_to_play_dialog.dart';
 import 'package:pacman_juego/ui/dialogs/name_dialog.dart';
 import 'package:pacman_juego/ui/dialogs/profiles_dialog.dart';
+import 'package:pacman_juego/config/game_config.dart';
+import 'package:pacman_juego/game/levels/level_data.dart';
+import 'package:pacman_juego/ui/dialogs/level_select_dialog.dart';
 import 'package:pacman_juego/ui/screens/game_screen.dart';
 import 'package:pacman_juego/ui/widgets/neon_button.dart';
 
@@ -115,6 +118,28 @@ class _MainMenuScreenState extends State<MainMenuScreen>
     } else if (wantsNew == true) {
       _askName(canCancel: true);
     }
+  }
+
+  /// Empieza la partida. Si el perfil ya desbloqueó más niveles, deja elegir con
+  /// cuál empezar.
+  Future<void> _startGame() async {
+    final unlocked =
+        kUnlockAllLevels ? kLevels.length : (currentProfile?.level ?? 1);
+    var startLevel = 1;
+    if (unlocked > 1) {
+      final chosen = await showDialog<int>(
+        context: context,
+        builder: (_) => LevelSelectDialog(unlocked: unlocked),
+      );
+      if (chosen == null || !mounted) return;
+      startLevel = chosen;
+    }
+    GameAudio.stopMusic(); // Termina la música del menú.
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => GameScreen(startLevel: startLevel)),
+    );
   }
 
   /// Libera el controlador de animación al salir de la pantalla (evita fugas
@@ -236,14 +261,7 @@ class _MainMenuScreenState extends State<MainMenuScreen>
                         child: NeonButton(
                           label: 'INICIAR JUEGO',
                           s: s * 1.15,
-                          onPressed: () {
-                            GameAudio.stopMusic(); // Termina la música del menú.
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (context) => const GameScreen()),
-                            );
-                          },
+                          onPressed: _startGame,
                         ),
                       ),
                       SizedBox(height: 8 * s),

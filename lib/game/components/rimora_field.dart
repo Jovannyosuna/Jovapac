@@ -105,7 +105,7 @@ class RimoraField extends PositionComponent with HasGameReference<PacManGame> {
   }
 
   /// Tamaño (px) de una rimora. Se ve en una casilla de 24 px.
-  static const double rimoraSize = 12.0;
+  static const double rimoraSize = 9.0;
 
   /// Tamaño (px) de una mydra (casi toda la casilla, sin invadir las vecinas).
   static const double mydraSize = 20.0;

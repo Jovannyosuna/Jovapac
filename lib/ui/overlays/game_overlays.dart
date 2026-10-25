@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pacman_juego/audio/game_audio.dart';
 import 'package:pacman_juego/core/constants.dart';
+import 'package:pacman_juego/game/levels/level_data.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 import 'package:pacman_juego/ui/overlays/result_card.dart';
 import 'package:pacman_juego/ui/screens/main_menu_screen.dart';
@@ -61,6 +62,40 @@ class GameOverOverlay extends StatelessWidget {
   }
 }
 
+/// Menú que aparece al completar un nivel (si quedan más): muestra tu
+/// puntuación y te deja pasar al siguiente nivel o volver al menú.
+class LevelCompleteOverlay extends StatelessWidget {
+  final PacManGame game;
+  const LevelCompleteOverlay(this.game, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // El índice de la lista es el número del nivel actual: apunta al siguiente.
+    final next = kLevels[game.level];
+    return ResultCard(
+      asset: 'assets/images/win.png',
+      fallback: '¡NIVEL COMPLETADO!',
+      accent: neonLime,
+      badge: game.newRecord ? '¡NUEVO RÉCORD!' : null,
+      stats: [
+        (s) => StatChip('PUNTUACIÓN', '${game.score}', Colors.white, s),
+        (s) => StatChip('RÉCORD', '${game.highScore}', neonLime, s),
+      ],
+      subtitle: '¡Nivel ${game.level} completado!   Siguiente: ${next.name}',
+      actions: [
+        (s) => NeonButton(
+            label: 'SIGUIENTE NIVEL', s: s, onPressed: () => game.nextLevel()),
+        (s) => NeonButton(
+            label: 'MENÚ',
+            s: s,
+            filled: false,
+            color: Colors.white,
+            onPressed: () => _goToMainMenu(context)),
+      ],
+    );
+  }
+}
+
 /// Menú que aparece al ganar la partida (todos los puntos comidos).
 ///
 /// Muestra `win.png` estirada al ancho del laberinto, la puntuación, el
@@ -83,7 +118,7 @@ class GameWinOverlay extends StatelessWidget {
         (s) => StatChip('PUNTUACIÓN', '${game.score}', Colors.white, s),
         (s) => StatChip('RÉCORD', '${game.highScore}', neonLime, s),
       ],
-      subtitle: '¡Comiste todas las rimoras y mydras!',
+      subtitle: '¡Completaste los 5 niveles del laberinto de cristal!',
       actions: [
         (s) => NeonButton(
             label: 'JUGAR DE NUEVO', s: s, onPressed: () => game.startGame()),

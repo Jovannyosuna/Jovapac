@@ -6,6 +6,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
+import 'dart:math';
+import 'package:pacman_juego/game/components/hud_panel.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 import 'package:pacman_juego/ui/overlays/game_overlays.dart';
 
@@ -15,7 +17,10 @@ import 'package:pacman_juego/ui/overlays/game_overlays.dart';
 /// lo resuelve [PacManGame] internamente. Convierte los deslizamientos del
 /// dedo en cambios de dirección de Pac-Man.
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
+  const GameScreen({super.key, this.startLevel = 1});
+
+  /// Nivel con el que empieza la partida (el elegido en el menú).
+  final int startLevel;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -25,7 +30,8 @@ class GameScreen extends StatefulWidget {
 /// el nodo de foco del teclado.
 class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Instancia única del juego, creada una sola vez para toda la pantalla.
-  final PacManGame gameInstance = PacManGame();
+  late final PacManGame gameInstance =
+      PacManGame(startLevel: widget.startLevel);
 
   /// Foco del teclado del juego (se devuelve al juego al salir de la pausa).
   final FocusNode _gameFocus = FocusNode();
@@ -51,6 +57,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     gameInstance.saveProgress();
     _gameFocus.dispose();
     super.dispose();
+  }
+
+  /// Convierte un toque de pantalla a coordenadas del lienzo virtual (900 x 432)
+  /// y, si cae sobre el botón de hielo, usa la habilidad.
+  void _onTap(Offset position) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final size = box.size;
+    final scale = min(size.width / PacManGame.virtualWidth,
+        size.height / PacManGame.virtualHeight);
+    final offsetX = (size.width - PacManGame.virtualWidth * scale) / 2;
+    final offsetY = (size.height - PacManGame.virtualHeight * scale) / 2;
+    final dx = (position.dx - offsetX) / scale - HudPanel.buttonX;
+    final dy = (position.dy - offsetY) / scale - HudPanel.buttonY;
+    if (dx * dx + dy * dy <= HudPanel.hitRadius * HudPanel.hitRadius) {
+      gameInstance.useAbility();
+    }
   }
 
   @override
@@ -85,6 +108,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 }
               }
             },
+            // Un toque sobre el botón de hielo (columna derecha) usa la habilidad.
+            onTapUp: (details) => _onTap(details.localPosition),
             child: SizedBox.expand(
               child: GameWidget<PacManGame>.controlled(
                 gameFactory: () => gameInstance,
@@ -95,6 +120,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 overlayBuilderMap: {
                   'GameOverMenu': (context, game) => GameOverOverlay(game),
                   'GameWinMenu': (context, game) => GameWinOverlay(game),
+                  'LevelCompleteMenu': (context, game) =>
+                      LevelCompleteOverlay(game),
                   'PauseMenu': (context, game) => PauseOverlay(game, _gameFocus),
                 },
               ),

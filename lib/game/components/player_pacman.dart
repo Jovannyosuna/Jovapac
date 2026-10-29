@@ -12,7 +12,6 @@ import 'package:pacman_juego/config/game_config.dart';
 import 'package:pacman_juego/data/player_profile.dart';
 import 'package:pacman_juego/game/components/entity_label.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
-import 'package:pacman_juego/game/utils/ability_colors.dart';
 import 'package:pacman_juego/game/utils/game_sprite.dart';
 import 'package:pacman_juego/game/utils/geometry.dart';
 
@@ -119,38 +118,6 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
       Colors.yellow,
       fontSize: 7,
     );
-    _renderAbilityBar(canvas);
-  }
-
-  static final Paint _barBg = Paint()..color = const Color(0xCC000000);
-  static final Paint _barFill = Paint();
-  static final Paint _barGlow = Paint()
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.0;
-
-  /// Barrita bajo Vance: muestra cuánto falta para poder usar el hielo. Va de
-  /// verde (cargando) a naranja y a rojo (lista). Mientras dura el hielo se
-  /// vacía en cian.
-  void _renderAbilityBar(Canvas canvas) {
-    const w = 20.0;
-    const h = 3.0;
-    const y = 21.5;
-    final active = game.isFreezeActive;
-    final progress = active
-        ? (game.freezeLeft / game.levelData.freezeSeconds)
-            .clamp(0.0, 1.0)
-            .toDouble()
-        : game.abilityProgress;
-    canvas.drawRect(
-        const Rect.fromLTRB(-0.8, y - 0.8, w + 0.8, y + h + 0.8), _barBg);
-    _barFill.color = active ? Colors.cyanAccent : chargeColor(progress);
-    canvas.drawRect(Rect.fromLTWH(0, y, w * progress, h), _barFill);
-    if (!active && game.abilityReady) {
-      final pulse = 0.5 + 0.5 * sin(game.fxClock * 8);
-      _barGlow.color = Colors.white.withAlpha((110 + 120 * pulse).round());
-      canvas.drawRect(
-          const Rect.fromLTRB(-0.8, y - 0.8, w + 0.8, y + h + 0.8), _barGlow);
-    }
   }
 
   /// Lógica de cada frame: decide la dirección, avanza y recoge puntos.
@@ -249,6 +216,13 @@ class PlayerPacman extends PositionComponent with HasGameReference<PacManGame> {
       } else {
         GameAudio.sfx('sfx_rimora.wav', volume: 0.6);
       }
+    }
+
+    // Corazón de cristal final (nivel 5): al tomarlo se gana la partida.
+    if (game.finalHeartActive &&
+        gridPos.x == PacManGame.heartCol &&
+        gridPos.y == PacManGame.heartRow) {
+      game.collectFinalHeart();
     }
   }
 }

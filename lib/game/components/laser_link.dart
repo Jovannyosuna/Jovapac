@@ -54,6 +54,13 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   final Vector2 _prev = Vector2.zero(); // Centro del jugador (frame anterior).
   bool _hasPrev = false;
 
+  // Posición de los guardianes en el frame anterior (para detectar saltos).
+  double _pax = 0.0;
+  double _pay = 0.0;
+  double _pbx = 0.0;
+  double _pby = 0.0;
+  bool _hasPrevGhosts = false;
+
   // Pinceles reutilizables.
   final Paint _haloPaint = Paint()
     ..strokeWidth = 7
@@ -69,11 +76,6 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   /// Estados del frame anterior (para sonar solo al CAMBIAR de estado).
   bool _wasWarning = false;
   bool _wasActive = false;
-
-  /// Texto del contador, maquetado de nuevo solo cuando cambia.
-  String _hudText = '';
-  Color _hudColor = Colors.white;
-  TextPainter? _hudPainter;
 
   /// Empieza al inicio del enfriamiento del nivel actual.
   @override
@@ -129,18 +131,43 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
     _wasWarning = warningNow;
     _wasActive = activeNow;
 
-    if (hasPac && activeNow) {
-      _a.setValues(kyros!.position.x + kyros.size.x / 2,
-          kyros.position.y + kyros.size.y / 2);
-      _b.setValues(pyros!.position.x + pyros.size.x / 2,
-          pyros.position.y + pyros.size.y / 2);
+    // Posición de los dos guardianes. Si alguno "salta" de un extremo del mapa al
+    // otro (túnel lateral o portal), el rayo cruzaría toda la pantalla durante
+    // un frame; ese frame no cuenta como contacto.
+    var ghostsJumped = false;
+    if (bothReady) {
+      final ax = kyros!.position.x + kyros.size.x / 2;
+      final ay = kyros.position.y + kyros.size.y / 2;
+      final bx = pyros!.position.x + pyros.size.x / 2;
+      final by = pyros.position.y + pyros.size.y / 2;
+      if (_hasPrevGhosts) {
+        final da = (ax - _pax) * (ax - _pax) + (ay - _pay) * (ay - _pay);
+        final db = (bx - _pbx) * (bx - _pbx) + (by - _pby) * (by - _pby);
+        ghostsJumped = da > 576 || db > 576; // Más de 24 px en un frame.
+      }
+      _pax = ax;
+      _pay = ay;
+      _pbx = bx;
+      _pby = by;
+      _hasPrevGhosts = true;
+      _a.setValues(ax, ay);
+      _b.setValues(bx, by);
+    } else {
+      _hasPrevGhosts = false;
+    }
 
+    if (hasPac && activeNow && !ghostsJumped) {
       // Caso 1: el jugador está (casi) sobre la línea en este frame.
       final onBeam =
           distPointToSegment(_cur, _a, _b) <= AbilityConfig.laserHitRadius;
       // Caso 2: entre el frame anterior y este, el jugador atravesó el rayo
-      // (ocurre con movimientos rápidos).
-      final crossed = _hasPrev && segmentsIntersect(_prev, _cur, _a, _b);
+      // (ocurre con movimientos rápidos). Si Vance se teletransportó (túnel o
+      // portal), su recorrido "salta" por toda la pantalla y NO es un cruce real.
+      final jx = _cur.x - _prev.x;
+      final jy = _cur.y - _prev.y;
+      final jumped = jx * jx + jy * jy > 576; // Más de 24 px en un frame.
+      final crossed =
+          _hasPrev && !jumped && segmentsIntersect(_prev, _cur, _a, _b);
 
       if (onBeam || crossed) {
         game.playerDied(
@@ -158,8 +185,6 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
   /// Dibuja el contador del láser y, si corresponde, el rayo o su aviso.
   @override
   void render(Canvas canvas) {
-    _renderHud(canvas);
-
     final kyros = game.ghosts[GhostType.kyros];
     final pyros = game.ghosts[GhostType.pyros];
     if (!_operational(kyros) || !_operational(pyros)) return;
@@ -191,47 +216,5 @@ class LaserLink extends PositionComponent with HasGameReference<PacManGame> {
             Offset(ax + ux * e, ay + uy * e), _dashPaint);
       }
     }
-  }
-
-  /// Contador del láser, centrado en la parte superior.
-  void _renderHud(Canvas canvas) {
-    // Se elige el mensaje y el color según el estado del ciclo: pausa, activo,
-    // cargando o enfriamiento. Los segundos se muestran enteros para que el
-    // texto cambie solo una vez por segundo.
-    String text;
-    Color color;
-    if (game.modeController.isFrightened) {
-      text = 'LÁSER: EN PAUSA';
-      color = Colors.grey;
-    } else if (_isActive) {
-      final left = game.levelData.laserActive - _t;
-      text = 'LÁSER: ACTIVO ${left.ceil()}s';
-      color = Colors.redAccent;
-    } else if (_isWarning) {
-      text = 'LÁSER: ¡CARGANDO!';
-      color = Colors.orangeAccent;
-    } else {
-      final left = _cycle - _t;
-      text = 'LÁSER: LISTO EN ${left.toStringAsFixed(0)}s';
-      color = Colors.cyanAccent;
-    }
-
-    // El texto se maqueta solo cuando cambia (no en cada frame); el anterior se
-    // libera para no acumular memoria.
-    if (_hudPainter == null || text != _hudText || color != _hudColor) {
-      _hudText = text;
-      _hudColor = color;
-      _hudPainter?.dispose();
-      _hudPainter = TextPainter(
-        text: TextSpan(
-          text: text,
-          style: TextStyle(
-              color: color, fontSize: 11, fontWeight: FontWeight.bold),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-    }
-    final tp = _hudPainter!;
-    tp.paint(canvas, Offset(PacManGame.virtualWidth / 2 - tp.width / 2, 4));
   }
 }

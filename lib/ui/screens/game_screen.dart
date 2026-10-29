@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
-import 'dart:math';
 import 'package:pacman_juego/game/components/hud_panel.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 import 'package:pacman_juego/ui/overlays/game_overlays.dart';
@@ -59,19 +58,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// Convierte un toque de pantalla a coordenadas del lienzo virtual (900 x 432)
-  /// y, si cae sobre el botón de hielo, usa la habilidad.
+  /// Si el toque cae sobre el botón cryo (a la derecha), usa la habilidad.
   void _onTap(Offset position) {
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final size = box.size;
-    final scale = min(size.width / PacManGame.virtualWidth,
-        size.height / PacManGame.virtualHeight);
-    final offsetX = (size.width - PacManGame.virtualWidth * scale) / 2;
-    final offsetY = (size.height - PacManGame.virtualHeight * scale) / 2;
-    final dx = (position.dx - offsetX) / scale - HudPanel.buttonX;
-    final dy = (position.dy - offsetY) / scale - HudPanel.buttonY;
-    if (dx * dx + dy * dy <= HudPanel.hitRadius * HudPanel.hitRadius) {
+    final size = gameInstance.size;
+    if (size.x <= 0 || size.y <= 0) return;
+    final center = HudPanel.buttonCenter(size);
+    final r = HudPanel.hitRadius(size);
+    final dx = position.dx - center.dx;
+    final dy = position.dy - center.dy;
+    if (dx * dx + dy * dy <= r * r) {
       gameInstance.useAbility();
     }
   }

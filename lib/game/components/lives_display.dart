@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flame/components.dart';
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:pacman_juego/game/components/hud_panel.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 
 /// Una faceta (triángulo) del corazón de cristal.
@@ -121,15 +122,9 @@ class _CrystalHeart {
 /// - Partida nueva: los corazones reaparecen uno tras otro con rebote.
 class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
   LivesDisplay() {
-    priority = 45;
+    priority = 145;
   }
 
-  /// Centro horizontal de la columna derecha (entre 774 y 900).
-  static const double _cx = 837.0;
-  /// Altura del centro del primer corazón.
-  static const double _firstY = 62.0;
-  /// Separación vertical entre corazones.
-  static const double _gap = 44.0;
   /// Tamaño del corazón (px).
   static const double _heartSize = 30.0;
   /// Duración de la animación de rotura (s).
@@ -139,20 +134,6 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
 
   /// Geometría compartida del corazón de cristal.
   static final _CrystalHeart _crystal = _CrystalHeart(_heartSize);
-
-  /// Título "VIDAS", maquetado una sola vez.
-  static final TextPainter _title = TextPainter(
-    text: const TextSpan(
-      text: 'VIDAS',
-      style: TextStyle(
-        color: Colors.pinkAccent,
-        fontSize: 11,
-        fontWeight: FontWeight.w900,
-        letterSpacing: 1.5,
-      ),
-    ),
-    textDirection: TextDirection.ltr,
-  )..layout();
 
   // --- Imagen "horneada" del corazón ----------------------------------------
   /// Resolución de la imagen respecto al lienzo virtual.
@@ -340,13 +321,36 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
     }
   }
 
+  /// Dibuja un corazón de cristal (el mismo de las vidas) centrado en (0, 0) con
+  /// la [scale] indicada y opacidad [a255] (0 a 255). Lo usa también el corazón
+  /// final del nivel 5.
+  static void drawBakedHeart(Canvas canvas, double scale, int a255) {
+    if (!_bakeTried) _bake();
+    canvas.save();
+    canvas.scale(scale);
+    final baked = _baked;
+    if (baked != null) {
+      _imagePaint.color = Color.fromARGB(a255, 255, 255, 255);
+      canvas.drawImageRect(baked, _bakedSrc, _bakedDst, _imagePaint);
+    } else {
+      _paintCrystal(canvas, blur: false);
+    }
+    canvas.restore();
+  }
+
+  /// Dibuja los corazones en la esquina derecha de la PANTALLA (más pequeños y
+  /// sin letrero), uno bajo otro.
   @override
   void render(Canvas canvas) {
-    _title.paint(canvas, Offset(_cx - _title.width / 2, 30));
+    final size = game.size;
+    if (size.x <= 0 || size.y <= 0) return;
+    final u = HudPanel.scaleFor(size);
+    game.beginScreenSpace(canvas);
 
     for (int i = 0; i < _full.length; i++) {
       canvas.save();
-      canvas.translate(_cx, _firstY + i * _gap);
+      canvas.translate(size.x - 18 * u, size.y * 0.165 + i * size.y * 0.082);
+      canvas.scale(0.85 * u);
 
       // Hueco vacío (siempre visible debajo).
       canvas.drawPath(_crystal.outline, _slotPaint);
@@ -370,5 +374,6 @@ class LivesDisplay extends PositionComponent with HasGameReference<PacManGame> {
       }
       canvas.restore();
     }
+    game.endScreenSpace(canvas);
   }
 }

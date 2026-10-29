@@ -9,6 +9,7 @@ import 'package:flame/components.dart';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:pacman_juego/core/constants.dart';
+import 'package:pacman_juego/game/components/hud_panel.dart';
 import 'package:pacman_juego/game/levels/level_data.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 
@@ -156,6 +157,9 @@ class CountdownOverlay extends PositionComponent
   void render(Canvas canvas) {
     final left = game.countdownLeft;
     if (left <= 0) return;
+    final size = game.size;
+    if (size.x <= 0 || size.y <= 0) return;
+    final u = HudPanel.scaleFor(size);
 
     final elapsed = PacManGame.countdownSeconds - left;
     final step = min(3, (elapsed / _stepSeconds).floor()); // 0..3
@@ -166,20 +170,20 @@ class CountdownOverlay extends PositionComponent
         .toDouble();
     final color = _colors[step];
 
-    final mazeW = game.maxCols * game.tileSize;
-    final mazeH = game.mazeGrid.length * game.tileSize;
-    final cx = game.mazeOffsetX + mazeW / 2;
-    final cy = 24 + mazeH / 2;
+    game.beginScreenSpace(canvas);
 
-    // Velo oscuro sobre el laberinto para que el número destaque.
-    canvas.drawRect(Rect.fromLTWH(game.mazeOffsetX, 24, mazeW, mazeH), _veil);
+    // Velo oscuro sobre toda la pantalla para que el número destaque.
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.x, size.y), _veil);
+
+    // De aquí en adelante se dibuja centrado y a la escala de la interfaz.
+    canvas.translate(size.x / 2, size.y / 2);
+    canvas.scale(u);
 
     // Anillo de energía que se expande y se desvanece.
     _ring
       ..color = color.withAlpha(((1 - p) * 200).round())
       ..strokeWidth = 1 + 6 * (1 - p);
-    canvas.drawCircle(
-        Offset(cx, cy), 40 + 130 * Curves.easeOut.transform(p), _ring);
+    canvas.drawCircle(Offset.zero, 40 + 130 * Curves.easeOut.transform(p), _ring);
 
     // Número: entra con rebote (de 2x a 1x) y se desvanece en el último 25 %.
     final enter = Curves.easeOut.transform((p / 0.4).clamp(0.0, 1.0));
@@ -193,7 +197,6 @@ class CountdownOverlay extends PositionComponent
       final w = image.width.toDouble();
       final h = image.height.toDouble();
       canvas.save();
-      canvas.translate(cx, cy);
       canvas.scale(scale / _bake);
       canvas.drawImageRect(
         image,
@@ -207,14 +210,15 @@ class CountdownOverlay extends PositionComponent
     // Letrero del nivel (solo al empezar un nivel, no al reaparecer).
     if (game.showLevelBanner) {
       final banner = _bannerFor(game.levelData);
-      banner[0].paint(canvas, Offset(cx - banner[0].width / 2, cy - 150));
-      banner[1].paint(canvas, Offset(cx - banner[1].width / 2, cy - 112));
-      banner[2].paint(canvas, Offset(cx - banner[2].width / 2, cy - 92));
+      banner[0].paint(canvas, Offset(-banner[0].width / 2, -150));
+      banner[1].paint(canvas, Offset(-banner[1].width / 2, -112));
+      banner[2].paint(canvas, Offset(-banner[2].width / 2, -92));
     }
 
     // Mensaje inferior.
     final caption = _captionPainter(step < 3 ? '¡PREPÁRATE!' : '¡A JUGAR!');
-    caption.paint(
-        canvas, Offset(cx - caption.width / 2, cy + 95 - caption.height / 2));
+    caption.paint(canvas, Offset(-caption.width / 2, 95 - caption.height / 2));
+
+    game.endScreenSpace(canvas);
   }
 }

@@ -72,6 +72,8 @@ class GameAudio {
     'sfx_gate.wav',
     'sfx_level_up.wav',
     'sfx_level_start.wav',
+    'sfx_door.wav',
+    'sfx_heart.wav',
     'sfx_click.wav',
     'sfx_type.wav',
   ];

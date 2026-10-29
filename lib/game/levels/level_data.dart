@@ -156,7 +156,7 @@ class LevelData {
 const List<LevelData> kLevels = [
     LevelData(
       number: 1,
-      name: 'El laberinto de cristal',
+      name: 'El Laberinto de Cristal',
       subtitle: 'Aquí empieza todo',
       wallFill: Color(0xFF120A3C),
       wallBorder: Color(0xFF8B5CFF),
@@ -195,7 +195,7 @@ const List<LevelData> kLevels = [
     ),
     LevelData(
       number: 2,
-      name: 'Cámara de portales',
+      name: 'Cámara de Portales',
       subtitle: 'Los portales te cruzan al otro lado',
       wallFill: Color(0xFF062A22),
       wallBorder: Color(0xFF2EE6A6),
@@ -234,7 +234,7 @@ const List<LevelData> kLevels = [
     ),
     LevelData(
       number: 3,
-      name: 'Compuertas de energía',
+      name: 'Compuertas de Energía',
       subtitle: 'Las compuertas se abren y se cierran',
       wallFill: Color(0xFF2A0F06),
       wallBorder: Color(0xFFFF7A1A),
@@ -273,7 +273,7 @@ const List<LevelData> kLevels = [
     ),
     LevelData(
       number: 4,
-      name: 'Niebla de cristal',
+      name: 'Niebla de Cristal',
       subtitle: 'Solo ves lo que tienes cerca',
       wallFill: Color(0xFF0A1030),
       wallBorder: Color(0xFF4FC3F7),
@@ -312,7 +312,7 @@ const List<LevelData> kLevels = [
     ),
     LevelData(
       number: 5,
-      name: 'El corazón del laberinto',
+      name: 'El Corazón del Laberinto',
       subtitle: 'Portales, compuertas y niebla',
       wallFill: Color(0xFF2A0620),
       wallBorder: Color(0xFFFFD54A),

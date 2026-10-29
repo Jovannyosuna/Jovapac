@@ -20,7 +20,9 @@ import 'package:pacman_juego/game/ai/ghost_mode.dart';
 import 'package:pacman_juego/game/ai/ghost_personality.dart';
 import 'package:pacman_juego/game/components/countdown_overlay.dart';
 import 'package:pacman_juego/game/components/death_message.dart';
+import 'package:pacman_juego/game/components/final_heart.dart';
 import 'package:pacman_juego/game/components/fog_of_war.dart';
+import 'package:pacman_juego/game/components/ghost_door.dart';
 import 'package:pacman_juego/game/components/fps_counter.dart';
 import 'package:pacman_juego/game/components/gate_tiles.dart';
 import 'package:pacman_juego/game/components/hud_panel.dart';
@@ -187,11 +189,11 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// Número de columnas del laberinto.
   final int maxCols = 27;
 
-  /// Texto del marcador de puntos.
-  late TextComponent scoreText;
+  /// Texto del marcador de puntos (lo dibuja [HudPanel] sobre la pantalla).
+  final HudLabel scoreText = HudLabel('SCORE: 0');
 
   /// Texto del marcador de récord.
-  late TextComponent highScoreText;
+  final HudLabel highScoreText = HudLabel('HIGH SCORE: 0');
 
   /// Rimoras y mydras que quedan en el laberinto (un solo componente).
   late RimoraField rimoraField;
@@ -581,36 +583,124 @@ class PacManGame extends FlameGame with KeyboardEvents {
   /// 24 de margen inferior.
   static const double virtualHeight = 432.0;
 
-  /// Factor de escala del lienzo virtual a la pantalla real.
-  double _scale = 1.0;
-  /// Margen (en píxeles reales) que centra el lienzo ya escalado.
-  Vector2 _offset = Vector2.zero();
+  // ---------------------------------------------------------------------------
+  // CÁMARA
+  // El juego se ve ampliado y la cámara sigue a Vance por el mapa. La interfaz
+  // (marcadores, vidas, botón cryo, avisos) se dibuja sobre la pantalla con
+  // [beginScreenSpace] / [endScreenSpace], sin moverse con la cámara.
+  // ---------------------------------------------------------------------------
 
-  /// Recalcula la escala y el desplazamiento cada vez que cambia el tamaño
-  /// de la ventana o de la pantalla.
-  @override
-  void onGameResize(Vector2 size) {
-    super.onGameResize(size);
-    // Se elige el factor MENOR para que el lienzo quepa completo sin deformarse
-    // (quedan franjas oscuras en el lado sobrante).
-    _scale = min(size.x / virtualWidth, size.y / virtualHeight);
-    // El espacio sobrante se reparte por igual a ambos lados para centrar.
-    _offset = Vector2(
-      (size.x - virtualWidth * _scale) / 2,
-      (size.y - virtualHeight * _scale) / 2,
-    );
+  /// Centro de la cámara en el mundo (coordenadas del laberinto).
+  double camX = 0.0;
+  double camY = 0.0;
+  bool _camInit = false;
+
+  /// Zoom: píxeles de pantalla por cada píxel del mundo. Se elige para que se
+  /// vean [kCameraTilesTall] casillas de alto, así el mapa llena toda la
+  /// pantalla (sin franjas).
+  double get zoom => size.y / (kCameraTilesTall * tileSize);
+
+  /// Factor de tamaño de la interfaz según el alto de la pantalla.
+  double get hudScale => HudPanel.scaleFor(size);
+
+  /// Mueve la cámara suavemente hacia Vance, sin salirse del laberinto. Si Vance
+  /// se teletransporta (túnel o portal) la cámara salta de golpe.
+  void _updateCamera(double dt) {
+    if (!_ready || size.x <= 0 || size.y <= 0) return;
+    final z = zoom;
+    final viewW = size.x / z;
+    final viewH = size.y / z;
+    final left = mazeOffsetX;
+    const top = 24.0;
+    final right = left + maxCols * tileSize;
+    final bottom = top + mazeGrid.length * tileSize;
+    final tx = player.position.x + player.size.x / 2;
+    final ty = player.position.y + player.size.y / 2;
+
+    double clampAxis(double v, double lo, double hi, double view) {
+      if (view >= hi - lo) return (lo + hi) / 2; // El mapa cabe: centrado.
+      return v.clamp(lo + view / 2, hi - view / 2).toDouble();
+    }
+
+    final goalX = clampAxis(tx, left, right, viewW);
+    final goalY = clampAxis(ty, top, bottom, viewH);
+    if (!_camInit || (goalX - camX).abs() > 140 || (goalY - camY).abs() > 140) {
+      camX = goalX;
+      camY = goalY;
+      _camInit = true;
+    } else {
+      final k = min(1.0, 9 * dt);
+      camX += (goalX - camX) * k;
+      camY += (goalY - camY) * k;
+    }
   }
 
-  /// Aplica la traslación y escala calculadas antes de dibujar los componentes.
+  /// Dibuja el mundo con la cámara: centrado en Vance y ampliado.
   @override
   void render(Canvas canvas) {
-    // save/restore: la traslación y la escala solo afectan a este dibujado.
-    // El orden importa: primero se traslada y después se escala.
     canvas.save();
-    canvas.translate(_offset.x, _offset.y);
-    canvas.scale(_scale);
+    canvas.translate(size.x / 2, size.y / 2);
+    canvas.scale(zoom);
+    canvas.translate(-camX, -camY);
     super.render(canvas);
     canvas.restore();
+  }
+
+  /// Empieza a dibujar sobre la PANTALLA (coordenadas en píxeles lógicos, con
+  /// (0, 0) en la esquina superior izquierda). Hay que cerrar con
+  /// [endScreenSpace].
+  void beginScreenSpace(Canvas canvas) {
+    canvas.save();
+    canvas.translate(camX, camY);
+    canvas.scale(1 / zoom);
+    canvas.translate(-size.x / 2, -size.y / 2);
+  }
+
+  /// Termina el dibujo sobre la pantalla.
+  void endScreenSpace(Canvas canvas) => canvas.restore();
+
+  // ---------------------------------------------------------------------------
+  // FINAL DEL JUEGO: PUERTA Y CORAZÓN DE CRISTAL (nivel 5)
+  // ---------------------------------------------------------------------------
+
+  /// Casilla donde aparece el corazón de cristal (en medio de la casa).
+  static const int heartCol = 13;
+  static const int heartRow = 7;
+
+  /// `true` cuando la puerta de la casa de los guardianes está abierta (solo en
+  /// el último nivel, al comer todas las rimoras y mydras). Entonces Vance puede
+  /// entrar a la casa.
+  bool houseOpen = false;
+
+  /// `true` mientras el corazón de cristal final está esperando a Vance.
+  bool finalHeartActive = false;
+
+  /// Aviso de texto temporal que dibuja [HudPanel].
+  String hintText = '';
+  double hintLeft = 0.0;
+
+  /// Muestra un aviso de texto durante [seconds] segundos.
+  void showHint(String text, {double seconds = 4.0}) {
+    hintText = text;
+    hintLeft = seconds;
+  }
+
+  /// Abre la puerta de la casa y hace aparecer el corazón de cristal.
+  void _openHouse() {
+    houseOpen = true;
+    finalHeartActive = true;
+    add(FinalHeart());
+    GameAudio.sfx('sfx_door.wav');
+    showHint('¡La puerta se abrió! Toma el corazón de cristal');
+  }
+
+  /// Vance tomó el corazón de cristal: se termina el juego con victoria.
+  void collectFinalHeart() {
+    if (!finalHeartActive) return;
+    finalHeartActive = false;
+    children.whereType<FinalHeart>().toList().forEach((c) => c.removeFromParent());
+    GameAudio.sfx('sfx_heart.wav');
+    triggerGameWin();
   }
 
   /// Carga los recursos, crea los marcadores e inicia la primera partida.
@@ -625,15 +715,15 @@ class PacManGame extends FlameGame with KeyboardEvents {
     // (game_over, win y jova_logo se muestran con widgets de Flutter, no con
     // Flame, así que no se cargan aquí.)
     final jobs = <Future<void>>[
-      _loadSprite('vance.png', 64),
-      _loadSprite('rimora.png', 32),
-      _loadSprite('mydra.png', 48),
-      _loadSprite('mori.png', 64),
+      _loadSprite('vance.png', 160),
+      _loadSprite('rimora.png', 96),
+      _loadSprite('mydra.png', 160),
+      _loadSprite('mori.png', 160),
     ];
     for (final type in GhostType.values) {
       final personality = GhostPersonality.of(type);
-      jobs.add(_loadSprite(personality.spriteAsset, 64));
-      jobs.add(_loadSprite(personality.scaredSpriteAsset, 64));
+      jobs.add(_loadSprite(personality.spriteAsset, 160));
+      jobs.add(_loadSprite(personality.scaredSpriteAsset, 160));
     }
     await Future.wait(jobs);
 
@@ -644,38 +734,6 @@ class PacManGame extends FlameGame with KeyboardEvents {
       await _buildMask(GhostPersonality.of(type).spriteAsset);
     }
 
-    // Marcadores superiores. Sus posiciones están en coordenadas del lienzo
-    // virtual.
-    scoreText = TextComponent(
-      text: 'SCORE: 0',
-      position: Vector2(126, 4),
-      textRenderer: TextPaint(
-        style: const TextStyle(
-          color: Colors.cyanAccent,
-          fontSize: 13,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 1.5,
-        ),
-      ),
-    );
-
-    highScoreText = TextComponent(
-      text: 'HIGH SCORE: 0',
-      position: Vector2(670, 4),
-      textRenderer: TextPaint(
-        style: const TextStyle(
-          color: Colors.pinkAccent,
-          fontSize: 13,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 1.5,
-        ),
-      ),
-    );
-
-    // add() inserta el componente en el árbol del juego; desde ese momento se
-    // actualiza y se dibuja automáticamente.
-    add(scoreText);
-    add(highScoreText);
     // El récord que se muestra es el del perfil guardado.
     highScore = currentProfile?.highScore ?? 0;
     highScoreText.text = 'HIGH SCORE: $highScore';
@@ -683,6 +741,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     mazeWalls = MazeWalls();
     add(mazeWalls);
     add(PortalTiles());
+    add(GhostDoor());
     add(GateTiles());
     add(FogOfWar());
     add(HudPanel());
@@ -713,6 +772,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
   @override
   void update(double dt) {
     fxClock += dt;
+    if (hintLeft > 0) hintLeft -= dt;
     // El imán se recalcula ANTES de actualizar a los componentes, para que el
     // jugador use el valor de este mismo frame.
     if (_ready && !isFrozen) {
@@ -733,6 +793,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
     // Actualiza a todos los componentes hijos (jugador, fantasmas, láser...).
     super.update(dt);
+    _updateCamera(dt);
     if (!isFrozen) {
       // El reloj de modos (Scatter/Chase/Frightened) solo corre mientras se juega.
       modeController.update(dt);
@@ -865,6 +926,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
     gateAOpen = true;
     gateWarning = false;
     _gateTimer = 0.0;
+    houseOpen = false;
+    finalHeartActive = false;
+    hintLeft = 0.0;
 
     // Limpieza: se eliminan las entidades del nivel anterior antes de
     // reconstruirlas. Los marcadores de texto y el panel se conservan.
@@ -873,6 +937,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
             c is PlayerPacman ||
             c is Ghost ||
             c is RimoraField ||
+            c is FinalHeart ||
             c is TempWall ||
             c is LaserLink)
         .toList()
@@ -961,6 +1026,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
 
   /// Crea al jugador, a los cuatro fantasmas y el láser en su posición inicial.
   void _spawnEntities() {
+    _camInit = false; // La cámara salta a Vance al empezar.
     // Casilla inicial del jugador: columna 13, fila 12 (parte baja, centrada).
     player = PlayerPacman(Vector2(13, 12));
     add(player);
@@ -1117,7 +1183,7 @@ class PacManGame extends FlameGame with KeyboardEvents {
     if (col < 0 || col >= maxCols) return true;
     int cell = mazeGrid[row][col];
     if (cell == 1) return false;
-    if (cell == 2 && !isGhost) return false;
+    if (cell == 2 && !isGhost && !houseOpen) return false;
     // Compuertas de energía: cerradas bloquean el paso (a todos).
     if ((cell == TileCode.gateA || cell == TileCode.gateB) &&
         !isGateOpen(cell)) {
@@ -1205,7 +1271,9 @@ class PacManGame extends FlameGame with KeyboardEvents {
   void triggerLevelClear() {
     if (isGameOver || isGameWon || levelComplete) return;
     if (level >= kLevels.length) {
-      triggerGameWin();
+      // Último nivel: se abre la puerta de la casa y aparece el corazón de
+      // cristal; al tomarlo se gana (ver [collectFinalHeart]).
+      if (!houseOpen) _openHouse();
       return;
     }
     levelComplete = true;

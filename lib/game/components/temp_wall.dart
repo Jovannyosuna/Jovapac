@@ -45,7 +45,7 @@ class TempWall extends PositionComponent with HasGameReference<PacManGame> {
   double _solidTimer = 0.0;
 
   // --- Imagen de la cera (compartida por todas las paredes) ------------------
-  static const double _bakeScale = 4.0;
+  static const double _bakeScale = 8.0;
   static ui.Image? _wax;
   static bool _waxTried = false;
   static final Rect _src = Rect.fromLTWH(0, 0, 24 * _bakeScale, 24 * _bakeScale);

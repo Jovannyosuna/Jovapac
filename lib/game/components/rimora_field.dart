@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flame/components.dart';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:pacman_juego/game/pacman_game.dart';
@@ -56,13 +57,17 @@ class _Layer {
     final n = cols.length;
     final t = Float32List(n * 4);
     final r = Float32List(n * 4);
-    final scale = size / img.width;
+    // La imagen cabe entera en un cuadro de [size] x [size] (aunque no sea
+    // cuadrada) y queda centrada en su casilla.
+    final scale = size / max(img.width, img.height);
+    final dx = (size - img.width * scale) / 2;
+    final dy = (size - img.height * scale) / 2;
     for (int i = 0; i < n; i++) {
       // RSTransform sin rotación: [escala, 0, x, y]. Escala 0 = oculto.
       t[i * 4] = alive[i] ? scale : 0.0;
       t[i * 4 + 1] = 0.0;
-      t[i * 4 + 2] = xs[i];
-      t[i * 4 + 3] = ys[i];
+      t[i * 4 + 2] = xs[i] + dx;
+      t[i * 4 + 3] = ys[i] + dy;
       // Región de origen: la imagen completa.
       r[i * 4] = 0.0;
       r[i * 4 + 1] = 0.0;
@@ -105,7 +110,7 @@ class RimoraField extends PositionComponent with HasGameReference<PacManGame> {
   }
 
   /// Tamaño (px) de una rimora. Se ve en una casilla de 24 px.
-  static const double rimoraSize = 9.0;
+  static const double rimoraSize = mydraSize / 2;
 
   /// Tamaño (px) de una mydra (casi toda la casilla, sin invadir las vecinas).
   static const double mydraSize = 20.0;

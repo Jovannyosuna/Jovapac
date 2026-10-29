@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flame/components.dart';
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:pacman_juego/game/components/hud_panel.dart';
 import 'package:pacman_juego/game/pacman_game.dart';
 
 /// Texto SIN cuadro que aparece en el centro del laberinto mientras Pac-Man
@@ -95,6 +96,8 @@ class DeathMessage extends PositionComponent with HasGameReference<PacManGame> {
   @override
   void render(Canvas canvas) {
     if (!game.isDying) return;
+    final size = game.size;
+    if (size.x <= 0 || size.y <= 0) return;
 
     // Si es otra muerte, se rehacen las imágenes (y se liberan las anteriores).
     final key = '${game.deathTitle}|${game.deathDetail}';
@@ -114,12 +117,13 @@ class DeathMessage extends PositionComponent with HasGameReference<PacManGame> {
     final rise = (1 - fadeIn) * 10; // Sube suavemente al aparecer.
     _paint.color = Color.fromARGB(alpha, 255, 255, 255);
 
-    final mazeW = game.maxCols * game.tileSize;
-    final mazeH = game.mazeGrid.length * game.tileSize;
-    final cx = game.mazeOffsetX + mazeW / 2;
-    final cy = 24 + mazeH / 2;
-
-    _drawImage(canvas, _titleImage, cx, cy - 14 + rise);
-    _drawImage(canvas, _detailImage, cx, cy + 26 + rise);
+    // Se dibuja en el centro de la pantalla (no sigue a la cámara).
+    final u = HudPanel.scaleFor(size);
+    game.beginScreenSpace(canvas);
+    canvas.translate(size.x / 2, size.y / 2);
+    canvas.scale(u);
+    _drawImage(canvas, _titleImage, 0, -14 + rise);
+    _drawImage(canvas, _detailImage, 0, 26 + rise);
+    game.endScreenSpace(canvas);
   }
 }

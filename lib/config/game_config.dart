@@ -132,9 +132,13 @@ const int kGhostPoints = 750;
 
 /// Puntos que hay que ganar para recargar la habilidad de hielo. Al usarla NO se
 /// restan puntos del marcador: solo se vacía la barra y se vuelve a llenar.
-const double kAbilityCostPoints = 1500.0;
+const double kAbilityCostPoints = 2000.0;
 
 /// Si es `true`, el selector de niveles deja elegir cualquier nivel (útil para
 /// probar los niveles 2 a 5 sin tener que ganar los anteriores). Déjalo en
 /// `false` para jugar normal.
 const bool kUnlockAllLevels = false;
+
+/// Cuántas casillas de alto se ven en pantalla (zoom de la cámara). Menor
+/// número = más zoom. La cámara sigue a Vance y se mueve por el mapa.
+const double kCameraTilesTall = 8.5;

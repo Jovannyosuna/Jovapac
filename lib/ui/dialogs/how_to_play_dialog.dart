@@ -36,6 +36,7 @@ class _HowToPlayContent extends StatelessWidget {
           lines: [
             'Come todas las rimoras del laberinto sin que los fantasmas te atrapen.',
             'Tienes 3 vidas (corazones de cristal). Si pierdes las 3, la partida termina.',
+            'En el nivel 5, al comer todo, la puerta de la casa de los guardianes se abre y aparece un corazón de cristal: tómalo para ganar.',
           ],
         ),
         InfoSection(
@@ -55,11 +56,11 @@ class _HowToPlayContent extends StatelessWidget {
           ],
         ),
         InfoSection(
-          title: 'HABILIDAD DE HIELO',
+          title: 'HABILIDAD CRYO',
           color: Colors.lightBlueAccent,
           lines: [
-            'Cada 1500 puntos que ganes se carga tu habilidad. La barrita bajo Vance va de verde a naranja y se pone roja cuando está lista.',
-            'Úsala con la barra espaciadora (PC) o tocando el botón de hielo a la derecha (celular). Los guardianes se congelan unos segundos: no se mueven ni te dañan.',
+            'Cada 2000 puntos que ganes se carga tu habilidad. La barrita bajo Vance va de verde a naranja y se pone roja cuando está lista.',
+            'Úsala con la barra espaciadora (PC) o tocando el botón cryo a la derecha (celular). Los guardianes se congelan unos segundos: no se mueven ni te dañan.',
             'Al usarla no pierdes puntos; la barra se vacía y vuelves a cargarla desde cero.',
           ],
         ),
